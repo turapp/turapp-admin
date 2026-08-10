@@ -7,7 +7,7 @@ export default function WalletPage() {
   const router = useRouter();
 
   return (
-    <div style={{ minHeight: '100vh', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif', paddingBottom: '80px' }}>
+    <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif', paddingBottom: '80px' }}>
       
       {/* HEADER */}
       <div style={{ padding: '60px 24px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

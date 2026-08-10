@@ -16,9 +16,17 @@ export default function DriverDashboard() {
   const [vehicleType, setVehicleType] = useState('blanca');
   const [countdown, setCountdown] = useState(12);
   const [pin, setPin] = useState(['', '', '', '']);
-  const [driverLoc] = useState([4.8850, -77.0250]);
+  const [driverLoc] = useState([3.8850, -77.0250]); // Buenaventura real (antes 4.88, mal ubicado — mismo bug de la app de pasajeros)
   const [currentTrip, setCurrentTrip] = useState(null);
+  const [riderProfile, setRiderProfile] = useState(null);
+  const [pinError, setPinError] = useState(false);
   const [user, setUser] = useState(null);
+
+  useEffect(() => {
+    if (!currentTrip?.rider_id) { setRiderProfile(null); return; }
+    supabase.from('profiles').select('first_name, last_name').eq('id', currentTrip.rider_id).single()
+      .then(({ data }) => setRiderProfile(data));
+  }, [currentTrip?.rider_id]);
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data }) => {
@@ -67,9 +75,11 @@ export default function DriverDashboard() {
   const renderMap = (type) => {
     const markers = [{ position: driverLoc, popup: 'Mi Ubicación' }];
     if (currentTrip && (step === 'incoming' || step === 'pickup')) {
-      // Mock parsing POINT(lon lat)
-      // In a real app we parse WKT or PostGIS JSON, for mock we just put a static one or extract
-      markers.push({ position: [4.8829, -77.0267], popup: 'Pasajero' }); 
+      // pickup_location viene como GeoJSON {coordinates:[lon,lat]} desde
+      // Supabase/PostGIS — hay que voltear el orden para Leaflet [lat,lon].
+      const coords = currentTrip.pickup_location?.coordinates;
+      const passengerLoc = coords ? [coords[1], coords[0]] : driverLoc;
+      markers.push({ position: passengerLoc, popup: 'Pasajero' });
     }
     
     return (
@@ -287,43 +297,66 @@ export default function DriverDashboard() {
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>DC</div>
+                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>
+                  {riderProfile?.first_name ? riderProfile.first_name[0] + (riderProfile.last_name?.[0] || '') : '🧍'}
+                </div>
                 <div>
-                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>Diego Córdoba</div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', font: '600 13px Manrope,sans-serif', color: '#666' }}>
-                    <svg width="12" height="12" viewBox="0 0 16 16" fill="#0f8a6d"><path d="M8 12.8l-4.4 2.3.8-4.9L.8 6.7l4.9-.7L8 1.5l2.3 4.5 4.9.7-3.6 3.5.8 4.9L8 12.8z"></path></svg>
-                    4.87 · 53 viajes
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>
+                    {riderProfile ? `${riderProfile.first_name || ''} ${riderProfile.last_name || ''}`.trim() : 'Cargando...'}
                   </div>
                 </div>
               </div>
-              <div style={{ background: '#e7f3ef', color: '#0f8a6d', padding: '6px 12px', borderRadius: '6px', font: '800 12px Manrope,sans-serif' }}>Prepago</div>
+              <div style={{ background: '#e7f3ef', color: '#0f8a6d', padding: '6px 12px', borderRadius: '6px', font: '800 12px Manrope,sans-serif' }}>
+                {currentTrip?.payment_method === 'cash' ? 'Efectivo' : (currentTrip?.payment_method || 'Prepago')}
+              </div>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginBottom: '32px' }}>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <div style={{ width: '12px', height: '12px', borderRadius: '50%', border: '3px solid #0f8a6d', marginTop: '4px' }}></div>
                 <div>
-                  <div style={{ font: '800 15px Manrope,sans-serif', color: '#111' }}>Muelle El Piñal <span style={{ color: '#0f8a6d' }}>3 min · 1,1 km</span></div>
-                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Calle 5 #2-40, Comuna 4</div>
+                  <div style={{ font: '800 15px Manrope,sans-serif', color: '#111' }}>{currentTrip?.pickup_address || 'Origen'}</div>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <div style={{ width: '12px', height: '12px', background: '#111', marginTop: '4px' }}></div>
                 <div>
-                  <div style={{ font: '800 15px Manrope,sans-serif', color: '#111' }}>Terminal Marítimo <span style={{ color: '#666' }}>17 min</span></div>
-                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Cra. 1 #1-50, Comuna 3</div>
+                  <div style={{ font: '800 15px Manrope,sans-serif', color: '#111' }}>{currentTrip?.dropoff_address || 'Destino'}</div>
                 </div>
               </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
-              <button onClick={() => { setStep('online'); setCurrentTrip(null); }} style={{ height: '56px', borderRadius: '16px', border: '2px solid #eaeae8', color: '#111', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <button onClick={async () => {
+                // No actualiza el viaje en la BD: al no encontrar más
+                // conductor asignado, el pasajero se queda esperando sin
+                // saber que fue rechazado. Suficiente por ahora para que el
+                // conductor pueda seguir viendo otras solicitudes.
+                setStep('online');
+                setCurrentTrip(null);
+              }} style={{ height: '56px', borderRadius: '16px', border: '2px solid #eaeae8', color: '#111', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 Rechazar
               </button>
               <button onClick={async () => {
                 if (!currentTrip || !user) return;
-                const { error } = await supabase.from('trips').update({ status: 'accepted', driver_id: user.id }).eq('id', currentTrip.id);
+                // .eq('status','requested') + .select() evita que dos
+                // conductores en línea a la vez "ganen" el mismo viaje: si
+                // otro ya lo aceptó primero, data vuelve vacío en vez de
+                // sobreescribir silenciosamente su driver_id.
+                const { data, error } = await supabase
+                  .from('trips')
+                  .update({ status: 'matched', driver_id: user.id })
+                  .eq('id', currentTrip.id)
+                  .eq('status', 'requested')
+                  .select();
                 if (error) { alert("Error de Base de Datos al aceptar: " + error.message); return; }
+                if (!data || data.length === 0) {
+                  alert("Otro conductor ya aceptó este viaje.");
+                  setStep('online');
+                  setCurrentTrip(null);
+                  return;
+                }
+                setCurrentTrip(data[0]);
                 setStep('pickup');
               }} style={{ height: '56px', borderRadius: '16px', background: '#0f8a6d', color: '#fff', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 Aceptar
@@ -355,10 +388,14 @@ export default function DriverDashboard() {
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>DC</div>
+                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>
+                  {riderProfile?.first_name ? riderProfile.first_name[0] + (riderProfile.last_name?.[0] || '') : '🧍'}
+                </div>
                 <div>
-                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>Diego Córdoba</div>
-                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Muelle El Piñal · Calle 5 #2-40</div>
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>
+                    {riderProfile ? `${riderProfile.first_name || ''} ${riderProfile.last_name || ''}`.trim() : 'Cargando...'}
+                  </div>
+                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>{currentTrip?.pickup_address || 'Origen'}</div>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px' }}>
@@ -368,7 +405,7 @@ export default function DriverDashboard() {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px', color: '#0f8a6d', font: '600 13px Manrope,sans-serif' }}>
-              <span style={{ fontWeight: 800 }}>PIN 4172</span> Pídele el PIN al pasajero antes de arrancar.
+              Pídele el PIN al pasajero antes de arrancar — lo confirmas en la siguiente pantalla.
             </div>
 
             <button onClick={async () => {
@@ -416,14 +453,35 @@ export default function DriverDashboard() {
               ))}
             </div>
 
+            {pinError && (
+              <div style={{ color: '#c8402f', font: '700 13px Manrope,sans-serif', marginBottom: '12px' }}>PIN incorrecto. Confírmalo con el pasajero.</div>
+            )}
+
             <div style={{ background: '#faf0dd', padding: '12px', borderRadius: '8px', color: '#c98a1e', font: '600 12px Manrope,sans-serif', marginBottom: '24px', display: 'flex', gap: '8px' }}>
               <span>ℹ️</span> Después de 3 minutos empieza a cobrarse espera: $350 por minuto.
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <button style={{ font: '700 15px Manrope,sans-serif', color: '#c8402f' }}>No apareció</button>
               <button onClick={async () => {
                 if (!currentTrip || !user) return;
+                const { error } = await supabase.from('trips').update({
+                  status: 'cancelled',
+                  cancellation_reason: 'El pasajero no apareció',
+                  cancelled_by: 'driver',
+                  cancelled_at: new Date().toISOString(),
+                }).eq('id', currentTrip.id);
+                if (error) { alert("Error: " + error.message); return; }
+                setStep('online');
+                setCurrentTrip(null);
+                setPin(['', '', '', '']);
+              }} style={{ font: '700 15px Manrope,sans-serif', color: '#c8402f' }}>No apareció</button>
+              <button onClick={async () => {
+                if (!currentTrip || !user) return;
+                if (pin.join('') !== currentTrip.pin_code) {
+                  setPinError(true);
+                  return;
+                }
+                setPinError(false);
                 const { error } = await supabase.from('trips').update({ status: 'in_progress' }).eq('id', currentTrip.id);
                 if (error) { alert("Error: " + error.message); return; }
                 setStep('enroute');

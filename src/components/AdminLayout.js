@@ -25,7 +25,21 @@ const PAGE_TITLES = {
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
   const { lang } = useAppContext();
-  
+
+  // La app de conductor es su propia experiencia mobile de pantalla completa
+  // (se despliega en driver.turapp.co) — no debe llevar el sidebar/topbar de
+  // escritorio del panel de administración, sino el mismo simulador de
+  // iPhone que usa la app de pasajeros para poder revisarla en escritorio.
+  if (pathname.startsWith('/driver')) {
+    return (
+      <div id="driver-iphone-wrapper">
+        <div id="driver-iphone-wrapper-content" style={{ position: 'relative', width: '100%', height: '100%' }}>
+          {children}
+        </div>
+      </div>
+    );
+  }
+
   // Find matching title based on route prefix
   let routeKey = '/';
   if (pathname !== '/') {

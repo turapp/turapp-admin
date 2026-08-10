@@ -30,7 +30,7 @@ export default function IntermunicipalPage() {
   const currentTrips = departures; // Currently not filtering by direction for simplicity
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f4f4f3', color: '#111', paddingBottom: '40px', fontFamily: 'Manrope, sans-serif' }}>
+    <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#f4f4f3', color: '#111', paddingBottom: '40px', fontFamily: 'Manrope, sans-serif' }}>
       
       {/* Header */}
       <div style={{ background: '#fff', padding: '60px 24px 24px', borderBottomLeftRadius: '32px', borderBottomRightRadius: '32px', boxShadow: '0 8px 32px rgba(0,0,0,0.04)', position: 'relative', zIndex: 10 }}>

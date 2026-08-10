@@ -209,7 +209,7 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: '#fff', color: '#000', fontFamily: 'Manrope, sans-serif', position: 'relative', overflowX: 'hidden' }}>
+    <div style={{ position: 'absolute', inset: 0, background: '#fff', color: '#000', fontFamily: 'Manrope, sans-serif', overflow: 'hidden' }}>
       
       {/* Input de archivo invisible para capturar cámara o archivos */}
       <input 
@@ -263,7 +263,7 @@ export default function OnboardingPage() {
 
       {/* 1. LOGIN (Driver Phone Auth) */}
       {step === 1 && (
-        <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', minHeight: '100vh', animation: 'trFade .3s ease', background: '#000', color: '#fff', padding: '60px 24px 40px' }}>
+        <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', animation: 'trFade .3s ease', background: '#000', color: '#fff', padding: '60px 24px 40px' }}>
           
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
             
@@ -320,7 +320,7 @@ export default function OnboardingPage() {
 
       {/* 2. VEHICLE SELECTION */}
       {step === 2 && (
-        <div style={{ padding: '60px 24px 40px', display: 'flex', flexDirection: 'column', minHeight: '100vh', animation: 'trFade .3s ease' }}>
+        <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '60px 24px 40px', display: 'flex', flexDirection: 'column', animation: 'trFade .3s ease' }}>
           
           <button onClick={() => setStep(1)} style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', marginBottom: '32px' }}>
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
@@ -377,7 +377,7 @@ export default function OnboardingPage() {
 
       {/* 3. DOCUMENTS */}
       {step === 3 && (
-        <div style={{ padding: '60px 24px 120px', background: '#fff', minHeight: '100vh', animation: 'trFade .3s ease' }}>
+        <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '60px 24px 120px', background: '#fff', animation: 'trFade .3s ease' }}>
           
           <div style={{ display: 'flex', justifyContent: 'center', position: 'relative', marginBottom: '24px' }}>
             <button onClick={() => setStep(2)} style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: '40px', height: '40px', borderRadius: '50%', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}>
@@ -459,7 +459,7 @@ export default function OnboardingPage() {
 
       {/* 4. BIOMETRIC INTRO STEP */}
       {step === 4 && (
-        <div style={{ padding: '60px 24px 40px', background: '#000', color: '#fff', minHeight: '100vh', display: 'flex', flexDirection: 'column', animation: 'trFade .3s ease' }}>
+        <div style={{ position: 'absolute', inset: 0, padding: '60px 24px 40px', background: '#000', color: '#fff', display: 'flex', flexDirection: 'column', animation: 'trFade .3s ease' }}>
           
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '20px' }}>
             {vehicleType && (
@@ -491,7 +491,7 @@ export default function OnboardingPage() {
 
       {/* 5. UNDER REVIEW */}
       {step === 5 && (
-        <div style={{ padding: '60px 24px 40px', display: 'flex', flexDirection: 'column', minHeight: '100vh', animation: 'trFade .3s ease', background: '#fff' }}>
+        <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', padding: '60px 24px 40px', display: 'flex', flexDirection: 'column', animation: 'trFade .3s ease', background: '#fff' }}>
           
           <div style={{ display: 'flex', justifyContent: 'center', position: 'relative', marginBottom: '40px' }}>
             <button onClick={() => setStep(2)} style={{ position: 'absolute', left: 0, top: '50%', transform: 'translateY(-50%)', width: '40px', height: '40px', borderRadius: '50%', background: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}>

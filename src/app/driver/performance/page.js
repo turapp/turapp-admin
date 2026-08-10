@@ -5,7 +5,7 @@ import DriverBottomNav from '../../../components/DriverBottomNav';
 
 export default function PerformancePage() {
   return (
-    <div style={{ minHeight: '100vh', background: '#fff', color: '#111', paddingBottom: '100px', fontFamily: 'Manrope, sans-serif' }}>
+    <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#fff', color: '#111', paddingBottom: '100px', fontFamily: 'Manrope, sans-serif' }}>
       
       {/* Header */}
       <div style={{ padding: '40px 16px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

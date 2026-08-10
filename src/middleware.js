@@ -78,6 +78,11 @@ export async function middleware(request) {
 
   // --- Verificar rol para rutas de conductor ---
   if (DRIVER_ROUTES.some(r => pathname.startsWith(r))) {
+    if (!user) {
+      url.pathname = '/driver/onboarding';
+      return NextResponse.redirect(url);
+    }
+
     const { data: profile } = await supabase
       .from('profiles')
       .select('role, is_approved')
