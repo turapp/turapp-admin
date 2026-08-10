@@ -1,19 +1,40 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { supabase } from '../../../lib/supabaseClient';
 
 export default function PlanPage() {
   const router = useRouter();
   const [currentPlan, setCurrentPlan] = useState('free'); // 'free' or 'premium'
   const [isPaying, setIsPaying] = useState(false);
+  const [userId, setUserId] = useState(null);
 
-  const handleUpgrade = () => {
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data?.user) return;
+      setUserId(data.user.id);
+      const { data: plan } = await supabase.from('driver_plans').select('plan_type').eq('driver_id', data.user.id).single();
+      if (plan) setCurrentPlan(plan.plan_type);
+    });
+  }, []);
+
+  // NOTA: esto todavía no cobra de verdad — actualiza el plan directo en la
+  // base de datos. Falta conectar la suscripción recurrente real (ePayco u
+  // otro) antes de lanzar esto a producción; por ahora deja al conductor
+  // pasar a Premium sin que se le cobre, para poder probar la función.
+  const handleUpgrade = async () => {
+    if (!userId) return;
     setIsPaying(true);
-    setTimeout(() => {
-      setIsPaying(false);
-      setCurrentPlan('premium');
-    }, 2000);
+    const { error } = await supabase.from('driver_plans').upsert({
+      driver_id: userId,
+      plan_type: 'premium',
+      commission_rate: 0,
+      monthly_fee: 60000,
+    }, { onConflict: 'driver_id' });
+    setIsPaying(false);
+    if (error) { alert('No se pudo cambiar de plan: ' + error.message); return; }
+    setCurrentPlan('premium');
   };
 
   return (

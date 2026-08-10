@@ -10,6 +10,9 @@ export default function OnboardingPage() {
   // Navigation Steps: 1: Login, 2: Vehicle, 3: Documents, 4: Biometrics, 5: Review
   const [step, setStep] = useState(1);
   const [vehicleType, setVehicleType] = useState('');
+  const [vehiclePlate, setVehiclePlate] = useState('');
+  const [vehicleMake, setVehicleMake] = useState('');
+  const [vehicleModel, setVehicleModel] = useState('');
   const [loading, setLoading] = useState(false);
   
   // Auth States
@@ -41,16 +44,37 @@ export default function OnboardingPage() {
     }
   }, [step]);
 
-  // Document States
+  // Document States — arrancan todos como "Requerido"; nadie queda
+  // pre-aprobado sin haber subido ni revisado nada. Se sobreescriben con el
+  // estado real de driver_documents en cuanto hay sesión (efecto de abajo).
   const [docs, setDocs] = useState({
-    cedula: 'Aprobado',
-    licencia: 'Aprobado',
-    soat: 'Aprobado - vence 12/2026',
-    propiedad: 'En revisión',
-    tecnomecanica: 'Acción requerida',
+    cedula: 'Requerido',
+    licencia: 'Requerido',
+    soat: 'Requerido',
+    propiedad: 'Requerido',
+    tecnomecanica: 'Requerido',
     tarjeton: 'Requerido',
     planilla: 'Requerido'
   });
+
+  const DOC_STATUS_LABEL = { approved: 'Aprobado', pending: 'En revisión', rejected: 'Acción requerida', expired: 'Acción requerida' };
+
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data?.user) return;
+      const { data: existingDocs } = await supabase
+        .from('driver_documents')
+        .select('doc_type, status')
+        .eq('driver_id', data.user.id);
+      if (existingDocs?.length) {
+        setDocs((prev) => {
+          const next = { ...prev };
+          existingDocs.forEach((d) => { next[d.doc_type] = DOC_STATUS_LABEL[d.status] || 'Requerido'; });
+          return next;
+        });
+      }
+    });
+  }, []);
 
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -140,14 +164,22 @@ export default function OnboardingPage() {
 
   const finishOnboarding = async (userId) => {
     try {
-      // 1. Guardar Vehículo
-      await supabase.from('vehicles').insert({
+      // 1. Guardar Vehículo — plate tiene restricción UNIQUE en la base de
+      // datos, así que un valor fijo aquí rompía el registro de cualquier
+      // conductor después del primero.
+      const { error: vehicleError } = await supabase.from('vehicles').insert({
         driver_id: userId,
-        plate: 'PDT123', // Demo estático
-        plate_type: 'yellow',
-        category: vehicleType || 'taxi',
+        plate: vehiclePlate.trim(),
+        plate_type: vehicleType === 'taxi' ? 'yellow' : 'white',
+        category: vehicleType === 'intermunicipal' ? 'cali' : (vehicleType === 'turafavor' ? 'particular' : (vehicleType || 'taxi')),
+        make: vehicleMake.trim() || null,
+        model: vehicleModel.trim() || null,
         is_active: true
       });
+      if (vehicleError) {
+        alert('No se pudo guardar el vehículo: ' + vehicleError.message);
+        return;
+      }
 
       // 2. Crear Driver Profile
       await supabase.from('driver_profiles').upsert({
@@ -363,11 +395,39 @@ export default function OnboardingPage() {
             </div>
           </div>
 
+          {vehicleType && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '24px' }}>
+              <input
+                type="text"
+                value={vehiclePlate}
+                onChange={(e) => setVehiclePlate(e.target.value.toUpperCase())}
+                placeholder="Placa (ej: ABC123)"
+                style={{ height: '56px', borderRadius: '14px', background: '#f5f5f5', border: 'none', padding: '0 16px', font: '700 16px Manrope,sans-serif', color: '#111', outline: 'none', letterSpacing: '0.05em' }}
+              />
+              <div style={{ display: 'flex', gap: '12px' }}>
+                <input
+                  type="text"
+                  value={vehicleMake}
+                  onChange={(e) => setVehicleMake(e.target.value)}
+                  placeholder="Marca (ej: Chevrolet)"
+                  style={{ flex: 1, height: '56px', borderRadius: '14px', background: '#f5f5f5', border: 'none', padding: '0 16px', font: '600 15px Manrope,sans-serif', color: '#111', outline: 'none' }}
+                />
+                <input
+                  type="text"
+                  value={vehicleModel}
+                  onChange={(e) => setVehicleModel(e.target.value)}
+                  placeholder="Modelo (ej: Spark GT)"
+                  style={{ flex: 1, height: '56px', borderRadius: '14px', background: '#f5f5f5', border: 'none', padding: '0 16px', font: '600 15px Manrope,sans-serif', color: '#111', outline: 'none' }}
+                />
+              </div>
+            </div>
+          )}
+
           <div style={{ marginTop: 'auto', paddingTop: '20px' }}>
-            <button 
-              disabled={!vehicleType}
-              onClick={() => { if (vehicleType) setStep(3); }} 
-              style={{ width: '100%', height: '56px', borderRadius: '16px', background: vehicleType ? '#000' : '#e0e0e0', color: vehicleType ? '#fff' : '#888', font: '800 16px Manrope,sans-serif', border: 'none', transition: 'background 0.2s ease' }}
+            <button
+              disabled={!vehicleType || !vehiclePlate.trim()}
+              onClick={() => { if (vehicleType && vehiclePlate.trim()) setStep(3); }}
+              style={{ width: '100%', height: '56px', borderRadius: '16px', background: (vehicleType && vehiclePlate.trim()) ? '#000' : '#e0e0e0', color: (vehicleType && vehiclePlate.trim()) ? '#fff' : '#888', font: '800 16px Manrope,sans-serif', border: 'none', transition: 'background 0.2s ease' }}
             >
               Continuar
             </button>
@@ -566,7 +626,7 @@ export default function OnboardingPage() {
 
           </div>
 
-          <button onClick={() => router.push('/driver/intermunicipal/active')} style={{ width: '100%', height: '56px', borderRadius: '12px', background: '#f5f5f5', color: '#000', font: '700 16px Manrope,sans-serif', border: 'none' }}>
+          <button onClick={() => router.push('/driver')} style={{ width: '100%', height: '56px', borderRadius: '12px', background: '#f5f5f5', color: '#000', font: '700 16px Manrope,sans-serif', border: 'none' }}>
             Ir a la pantalla principal
           </button>
         </div>

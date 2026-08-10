@@ -16,17 +16,57 @@ export default function DriverDashboard() {
   const [vehicleType, setVehicleType] = useState('blanca');
   const [countdown, setCountdown] = useState(12);
   const [pin, setPin] = useState(['', '', '', '']);
-  const [driverLoc] = useState([3.8850, -77.0250]); // Buenaventura real (antes 4.88, mal ubicado — mismo bug de la app de pasajeros)
+  const [driverLoc, setDriverLoc] = useState([3.8850, -77.0250]); // Buenaventura real (antes 4.88, mal ubicado — mismo bug de la app de pasajeros)
   const [currentTrip, setCurrentTrip] = useState(null);
   const [riderProfile, setRiderProfile] = useState(null);
   const [pinError, setPinError] = useState(false);
   const [user, setUser] = useState(null);
+  const [tripSummary, setTripSummary] = useState(null);
+  const [todayStats, setTodayStats] = useState({ total: 0, count: 0 });
 
   useEffect(() => {
     if (!currentTrip?.rider_id) { setRiderProfile(null); return; }
     supabase.from('profiles').select('first_name, last_name').eq('id', currentTrip.rider_id).single()
       .then(({ data }) => setRiderProfile(data));
   }, [currentTrip?.rider_id]);
+
+  // Transmite la posición real del conductor a driver_locations mientras
+  // está en línea o en un viaje activo, para que el pasajero pueda verlo
+  // moverse en su mapa. Si el navegador no da permiso de ubicación (o no
+  // hay GPS, como en pruebas de escritorio), se sigue enviando la última
+  // posición conocida para no dejar el mapa del pasajero completamente
+  // vacío — mejor una posición estática que ninguna.
+  const isActiveForTracking = step !== 'offline';
+  useEffect(() => {
+    if (!user || !isActiveForTracking) return;
+
+    const upsertLocation = (lat, lon, heading, speed) => {
+      setDriverLoc([lat, lon]);
+      supabase.from('driver_locations').upsert({
+        driver_id: user.id,
+        location: `SRID=4326;POINT(${lon} ${lat})`,
+        heading: heading ?? null,
+        speed: speed ?? null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'driver_id' }).then(({ error }) => {
+        if (error) console.error('Error actualizando ubicación:', error);
+      });
+    };
+
+    if (!navigator.geolocation) {
+      upsertLocation(driverLoc[0], driverLoc[1]);
+      return;
+    }
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => upsertLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.heading, pos.coords.speed),
+      () => upsertLocation(driverLoc[0], driverLoc[1]),
+      { enableHighAccuracy: true, maximumAge: 5000 }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isActiveForTracking]);
 
   useEffect(() => {
     supabase.auth.getUser().then(async ({ data }) => {
@@ -520,15 +560,19 @@ export default function DriverDashboard() {
             
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>DC</div>
+                <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}>
+                  {riderProfile?.first_name ? riderProfile.first_name[0] + (riderProfile.last_name?.[0] || '') : '🧍'}
+                </div>
                 <div>
-                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>Terminal Marítimo</div>
-                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Cra. 1 #1-50 · Diego C.</div>
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>{currentTrip?.dropoff_address || 'Destino'}</div>
+                  <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>{riderProfile?.first_name || 'Pasajero'}</div>
                 </div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>$17.400</div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: '#0f8a6d' }}>Prepago</div>
+                <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>${(currentTrip?.fare_estimated || 0).toLocaleString('es-CO')}</div>
+                <div style={{ font: '600 12px Manrope,sans-serif', color: '#0f8a6d' }}>
+                  {currentTrip?.payment_method === 'cash' ? 'Efectivo' : (currentTrip?.payment_method || 'Prepago')}
+                </div>
               </div>
             </div>
 
@@ -538,8 +582,27 @@ export default function DriverDashboard() {
               </button>
               <button onClick={async () => {
                 if (!currentTrip || !user) return;
-                const { error } = await supabase.from('trips').update({ status: 'completed' }).eq('id', currentTrip.id);
-                if (error) { alert("Error: " + error.message); return; }
+                const { data, error } = await supabase.functions.invoke('complete-trip', {
+                  body: { trip_id: currentTrip.id },
+                });
+                if (error) {
+                  const body = await error.context?.json?.().catch(() => null);
+                  alert("Error al finalizar: " + (body?.error || error.message));
+                  return;
+                }
+                setTripSummary(data.summary);
+                const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+                const { data: todayEarnings } = await supabase
+                  .from('earnings')
+                  .select('net_earning')
+                  .eq('driver_id', user.id)
+                  .gte('created_at', startOfDay.toISOString());
+                if (todayEarnings) {
+                  setTodayStats({
+                    total: todayEarnings.reduce((s, e) => s + Number(e.net_earning), 0),
+                    count: todayEarnings.length,
+                  });
+                }
                 setStep('completed');
               }} style={{ flex: 1, height: '56px', borderRadius: '16px', background: '#111', color: '#fff', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 Finalizar viaje
@@ -558,44 +621,46 @@ export default function DriverDashboard() {
           </div>
           
           <div style={{ font: '800 14px Manrope,sans-serif', color: '#666', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Ganaste en este viaje</div>
-          <div style={{ font: '800 48px Manrope,sans-serif', color: '#111', letterSpacing: '-0.03em', marginBottom: '40px' }}>$14.790</div>
-          
+          <div style={{ font: '800 48px Manrope,sans-serif', color: '#111', letterSpacing: '-0.03em', marginBottom: '40px' }}>${(tripSummary?.net_earning || 0).toLocaleString('es-CO')}</div>
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', borderBottom: '1px solid #eaeae8', paddingBottom: '24px', marginBottom: '24px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Tarifa <span style={{ opacity: 0.6 }}>· 8,2 km · 17 min</span></div>
-              <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>$12.400</div>
+              <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Tarifa</div>
+              <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>${(tripSummary?.fare || 0).toLocaleString('es-CO')}</div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Dinámica <span style={{ color: '#0f8a6d' }}>×1,4</span></div>
-              <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>$5.000</div>
-            </div>
+            {tripSummary?.dynamic_bonus > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Dinámica</div>
+                <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>${tripSummary.dynamic_bonus.toLocaleString('es-CO')}</div>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Propina</div>
-              <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>$2.000</div>
+              <div style={{ font: '700 14px Manrope,sans-serif', color: '#111' }}>${(tripSummary?.tip || 0).toLocaleString('es-CO')}</div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <div style={{ font: '700 14px Manrope,sans-serif', color: '#c8402f' }}>Comisión Turapp 22%</div>
-              <div style={{ font: '800 14px Manrope,sans-serif', color: '#c8402f' }}>-$4.610</div>
+              <div style={{ font: '700 14px Manrope,sans-serif', color: '#c8402f' }}>Comisión Turapp {tripSummary?.commission_rate ?? 22}%</div>
+              <div style={{ font: '800 14px Manrope,sans-serif', color: '#c8402f' }}>-${(tripSummary?.commission_amount || 0).toLocaleString('es-CO')}</div>
             </div>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '32px' }}>
             <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>Tu pago</div>
-            <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>$14.790</div>
+            <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>${(tripSummary?.net_earning || 0).toLocaleString('es-CO')}</div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '32px' }}>
             <div style={{ background: '#f4f4f3', borderRadius: '12px', padding: '16px' }}>
               <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>Hoy</div>
-              <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>$83.190</div>
+              <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>${todayStats.total.toLocaleString('es-CO')}</div>
             </div>
             <div style={{ background: '#f4f4f3', borderRadius: '12px', padding: '16px' }}>
               <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>Viajes hoy</div>
-              <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>8</div>
+              <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>{todayStats.count}</div>
             </div>
           </div>
 
-          <div style={{ font: '800 15px Manrope,sans-serif', color: '#111', marginBottom: '16px' }}>Califica a Diego</div>
+          <div style={{ font: '800 15px Manrope,sans-serif', color: '#111', marginBottom: '16px' }}>Califica a {riderProfile?.first_name || 'tu pasajero'}</div>
           <div style={{ display: 'flex', gap: '8px', marginBottom: 'auto' }}>
             {[1, 2, 3, 4, 5].map(i => (
               <div key={i} style={{ flex: 1, height: '48px', borderRadius: '8px', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -604,8 +669,15 @@ export default function DriverDashboard() {
             ))}
           </div>
           
-          <button 
-            onClick={() => setStep('online')}
+          <button
+            onClick={() => {
+              setCurrentTrip(null);
+              setRiderProfile(null);
+              setTripSummary(null);
+              setPin(['', '', '', '']);
+              setPinError(false);
+              setStep('online');
+            }}
             style={{ width: '100%', height: '56px', borderRadius: '16px', background: '#0f8a6d', color: '#fff', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '32px' }}
           >
             Volver a recibir viajes
