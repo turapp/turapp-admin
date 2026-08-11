@@ -19,6 +19,9 @@ function ActiveIntermunicipalTripContent() {
   
   // Real passenger data will be fetched if joined
   const [passengerData, setPassengerData] = useState({});
+  const [seatFinance, setSeatFinance] = useState({}); // seat_number -> {deposit_paid, balance_due}
+  const [departureInfo, setDepartureInfo] = useState(null); // {departure_time, vehicles:{plate}}
+  const [commissionRate, setCommissionRate] = useState(15);
 
   const [countdown, setCountdown] = useState(30 * 60 + 12);
   const [isScanning, setIsScanning] = useState(false);
@@ -33,20 +36,25 @@ function ActiveIntermunicipalTripContent() {
       const dbSeats = await caliService.getSeats(departureId);
       const newStatus = {};
       const newPassengerData = {};
+      const newFinance = {};
       dbSeats.forEach(s => {
         newStatus[s.seat_number] = s.status;
+        newFinance[s.seat_number] = { deposit_paid: Number(s.deposit_paid || 0), balance_due: Number(s.balance_due || 0) };
         if (s.rider_id) {
           // Si tuviéramos perfiles, los cargaríamos aquí. Por ahora mock.
           newPassengerData[s.seat_number] = {
             name: 'Pasajero ' + s.rider_id.substring(0,4),
             photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&q=80&w=150&h=150',
-            status: s.status === 'boarded' ? 'Abordado' : 'Reservado',
-            ticket: 'TC-' + s.id.substring(0,5).toUpperCase()
+            status: s.status === 'occupied' ? 'Abordado' : 'Reservado',
+            ticket: 'TC-' + s.id.substring(0,5).toUpperCase(),
+            deposit_paid: Number(s.deposit_paid || 0),
+            balance_due: Number(s.balance_due || 0),
           };
         }
       });
       setSeatStatus(prev => ({...prev, ...newStatus}));
       setPassengerData(newPassengerData);
+      setSeatFinance(newFinance);
     };
 
     loadData();
@@ -55,8 +63,19 @@ function ActiveIntermunicipalTripContent() {
       setSeatStatus(prev => ({ ...prev, [newSeat.seat_number]: newSeat.status }));
     });
 
+    supabase.from('cali_departures').select('departure_time, vehicles(plate)').eq('id', departureId).single()
+      .then(({ data }) => setDepartureInfo(data));
+
     return () => unsub();
   }, [departureId]);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data?.user) return;
+      const { data: plan } = await supabase.from('driver_plans').select('plan_type, commission_rate').eq('driver_id', data.user.id).single();
+      if (plan) setCommissionRate(plan.plan_type === 'premium' ? 0 : Number(plan.commission_rate ?? 15));
+    });
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000);
@@ -71,7 +90,7 @@ function ActiveIntermunicipalTripContent() {
 
   const handleSeatClick = (seatId) => {
     const status = seatStatus[seatId];
-    if (status === 'reserved' || status === 'paid' || status === 'boarded' || status === 'occupied' || status === 'booked_passenger') {
+    if (status === 'reserved' || status === 'occupied') {
       setSelectedSeat(seatId);
     }
   };
@@ -89,19 +108,26 @@ function ActiveIntermunicipalTripContent() {
         const dbSeats = await caliService.getSeats(departureId);
         const seatToUpdate = dbSeats.find(s => s.seat_number === seatId);
         if (seatToUpdate) {
-          await supabase.from('cali_seats').update({ status: 'boarded' }).eq('id', seatToUpdate.id);
+          await supabase.from('cali_seats').update({ status: 'occupied' }).eq('id', seatToUpdate.id);
         }
       }
     }, 2000);
   };
 
-  // Calculate pricing based on status
-  const bookedCount = Object.values(seatStatus).filter(v => v === 'booked_passenger' || v === 'boarded').length;
-  const boardedCount = Object.values(seatStatus).filter(v => v === 'boarded').length;
-  
-  const totalReserved = bookedCount * 16500;
-  const totalPending = (bookedCount - boardedCount) * 38500;
-  const totalPaidToDriver = boardedCount * 38500;
+  // Calculate pricing based on status — usa el deposit_paid/balance_due real
+  // de cada puesto (lo que el pasajero realmente pagó/debe), no un precio
+  // fijo por puesto que ignoraba el bloque de precio real de la salida.
+  const bookedCount = Object.values(seatStatus).filter(v => v === 'reserved' || v === 'occupied').length;
+  const boardedCount = Object.values(seatStatus).filter(v => v === 'occupied').length;
+
+  const financeValues = Object.values(seatFinance);
+  const totalReserved = financeValues.reduce((s, f) => s + (f.deposit_paid || 0), 0);
+  const totalPending = Object.entries(seatStatus)
+    .filter(([num, v]) => v === 'reserved')
+    .reduce((s, [num]) => s + (seatFinance[num]?.balance_due || 0), 0);
+  const totalPaidToDriver = Object.entries(seatStatus)
+    .filter(([num, v]) => v === 'occupied')
+    .reduce((s, [num]) => s + (seatFinance[num]?.balance_due || 0), 0);
 
   return (
     <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif', paddingBottom: '40px' }}>
@@ -114,7 +140,7 @@ function ActiveIntermunicipalTripContent() {
           </button>
           <div>
             <div style={{ font: '800 18px Manrope,sans-serif', letterSpacing: '-0.02em', color: '#111' }}>Tu próximo viaje</div>
-            <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Buenaventura → Cali · WBD84F</div>
+            <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Buenaventura → Cali · {departureInfo?.vehicles?.plate || '···'}</div>
           </div>
         </div>
         <div style={{ display: 'inline-flex', background: '#e7f3ef', color: '#0f8a6d', font: '800 10px Manrope,sans-serif', padding: '6px 10px', borderRadius: '8px', letterSpacing: '0.05em', alignItems: 'center', gap: '4px' }}>
@@ -131,7 +157,9 @@ function ActiveIntermunicipalTripContent() {
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{ font: '700 10px Manrope,sans-serif', color: '#888', letterSpacing: '0.05em', marginBottom: '4px' }}>SALIDA</div>
-            <div style={{ font: '800 20px/1 Manrope,sans-serif' }}>08:00</div>
+            <div style={{ font: '800 20px/1 Manrope,sans-serif' }}>
+              {departureInfo?.departure_time ? new Date(departureInfo.departure_time).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false }) : '···'}
+            </div>
           </div>
         </div>
         
@@ -186,13 +214,13 @@ function ActiveIntermunicipalTripContent() {
                   let color = '#ccc';
                   let isClickable = false;
                   
-                  if(status === 'booked_passenger') {
-                    bg = '#FFEBEB'; 
-                    borderColor = '#FF4D4D'; 
+                  if(status === 'reserved') {
+                    bg = '#FFEBEB';
+                    borderColor = '#FF4D4D';
                     color = '#FF4D4D';
                     isClickable = true;
                     content = s.id;
-                  } else if(status === 'boarded') {
+                  } else if(status === 'occupied') {
                     bg = '#e7f3ef'; 
                     borderColor = '#0f8a6d'; 
                     color = '#0f8a6d';
@@ -238,32 +266,34 @@ function ActiveIntermunicipalTripContent() {
           <div style={{ font: '800 18px Manrope,sans-serif', color: '#111', marginBottom: '16px' }}>Balance del viaje</div>
           
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-            <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Pasajeros ({totalPaidToDriver > 0 ? '1' : '0'} abordados)</div>
+            <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Pasajeros ({boardedCount} abordados, {bookedCount} reservados)</div>
             <div style={{ font: '800 14px Manrope,sans-serif', color: '#111' }}>${(totalReserved + totalPending).toLocaleString('es-CO')}</div>
           </div>
-          
+
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '16px' }}>
-            <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Comisión Turapp (15%)</div>
-            <div style={{ font: '800 14px Manrope,sans-serif', color: '#FF4D4D' }}>-${((totalReserved + totalPending) * 0.15).toLocaleString('es-CO')}</div>
+            <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Comisión Turapp ({commissionRate}%)</div>
+            <div style={{ font: '800 14px Manrope,sans-serif', color: '#FF4D4D' }}>-${Math.round((totalReserved + totalPending) * commissionRate / 100).toLocaleString('es-CO')}</div>
           </div>
 
           <div style={{ height: '1px', background: '#e0e0e0', marginBottom: '16px' }}></div>
-          
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ font: '800 16px Manrope,sans-serif', color: '#111' }}>Tu ganancia neta</div>
-            <div style={{ font: '800 18px Manrope,sans-serif', color: '#0f8a6d' }}>${((totalReserved + totalPending) * 0.85).toLocaleString('es-CO')}</div>
+            <div style={{ font: '800 18px Manrope,sans-serif', color: '#0f8a6d' }}>${Math.round((totalReserved + totalPending) * (1 - commissionRate / 100)).toLocaleString('es-CO')}</div>
           </div>
         </div>
 
-        <div style={{ background: 'linear-gradient(135deg, #fff9e6 0%, #ffe082 100%)', borderRadius: '20px', padding: '20px', marginBottom: '24px', display: 'flex', gap: '16px', alignItems: 'center', boxShadow: '0 8px 16px rgba(255,193,7,0.15)' }}>
-          <div style={{ background: '#fff', width: '48px', height: '48px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#b27b00', flexShrink: 0 }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-          </div>
-          <div>
-            <div style={{ font: '800 15px Manrope,sans-serif', color: '#996a00', marginBottom: '4px' }}>Suscripción Pro ($59k/mes)</div>
-            <div style={{ font: '600 13px/1.4 Manrope,sans-serif', color: '#b27b00' }}>Cámbiate al plan mensual y no pagues el 15% de comisión por cada viaje.</div>
-          </div>
-        </div>
+        {commissionRate > 0 && (
+          <button onClick={() => router.push('/driver/plan')} style={{ width: '100%', textAlign: 'left', background: 'linear-gradient(135deg, #fff9e6 0%, #ffe082 100%)', borderRadius: '20px', padding: '20px', marginBottom: '24px', display: 'flex', gap: '16px', alignItems: 'center', boxShadow: '0 8px 16px rgba(255,193,7,0.15)', border: 'none', cursor: 'pointer' }}>
+            <div style={{ background: '#fff', width: '48px', height: '48px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#b27b00', flexShrink: 0 }}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            </div>
+            <div>
+              <div style={{ font: '800 15px Manrope,sans-serif', color: '#996a00', marginBottom: '4px' }}>Turapp Premium ($60k/mes)</div>
+              <div style={{ font: '600 13px/1.4 Manrope,sans-serif', color: '#b27b00' }}>Cámbiate al plan mensual y no pagues el {commissionRate}% de comisión por cada viaje.</div>
+            </div>
+          </button>
+        )}
 
       </div>
 
@@ -287,8 +317,8 @@ function ActiveIntermunicipalTripContent() {
               <div>
                 <div style={{ font: '800 22px Manrope,sans-serif', color: '#111', marginBottom: '6px', letterSpacing: '-0.02em' }}>{passengerData[selectedSeat].name}</div>
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <div style={{ font: '700 12px Manrope,sans-serif', background: seatStatus[selectedSeat] === 'boarded' ? '#e7f3ef' : '#FFEBEB', color: seatStatus[selectedSeat] === 'boarded' ? '#0f8a6d' : '#FF4D4D', padding: '4px 10px', borderRadius: '8px' }}>
-                    {seatStatus[selectedSeat] === 'boarded' ? 'Abordado' : 'Reservado'}
+                  <div style={{ font: '700 12px Manrope,sans-serif', background: seatStatus[selectedSeat] === 'occupied' ? '#e7f3ef' : '#FFEBEB', color: seatStatus[selectedSeat] === 'occupied' ? '#0f8a6d' : '#FF4D4D', padding: '4px 10px', borderRadius: '8px' }}>
+                    {seatStatus[selectedSeat] === 'occupied' ? 'Abordado' : 'Reservado'}
                   </div>
                   <div style={{ font: '600 13px Manrope,sans-serif', color: '#666' }}>Asiento {selectedSeat}</div>
                 </div>
@@ -311,20 +341,22 @@ function ActiveIntermunicipalTripContent() {
               <div style={{ background: '#f8f8f8', borderRadius: '16px', padding: '16px', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                   <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Pago de pasajero</div>
-                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#111' }}>$38.500</div>
+                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#111' }}>${(passengerData[selectedSeat].balance_due || 0).toLocaleString('es-CO')}</div>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                  <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Comisión Turapp (15%)</div>
-                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#FF4D4D' }}>-$5.775</div>
+                  <div style={{ font: '600 14px Manrope,sans-serif', color: '#666' }}>Comisión Turapp ({commissionRate}%)</div>
+                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#FF4D4D' }}>-${Math.round((passengerData[selectedSeat].balance_due || 0) * commissionRate / 100).toLocaleString('es-CO')}</div>
                 </div>
                 <div style={{ height: '1px', background: '#e0e0e0', margin: '0 0 12px' }}></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div style={{ font: '800 14px Manrope,sans-serif', color: '#111' }}>Tu ganancia neta</div>
-                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#0f8a6d' }}>$32.725</div>
+                  <div style={{ font: '800 14px Manrope,sans-serif', color: '#0f8a6d' }}>
+                    ${Math.round((passengerData[selectedSeat].balance_due || 0) * (1 - commissionRate / 100)).toLocaleString('es-CO')}
+                  </div>
                 </div>
               </div>
 
-              {seatStatus[selectedSeat] !== 'boarded' && (
+              {seatStatus[selectedSeat] !== 'occupied' && (
                 <button onClick={() => simulateScan(selectedSeat)} style={{ width: '100%', height: '52px', borderRadius: '16px', background: '#000', color: '#fff', font: '800 15px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', border: 'none', boxShadow: '0 8px 16px rgba(0,0,0,0.15)' }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/><rect x="7" y="14" width="3" height="3"/><rect x="14" y="14" width="3" height="3"/></svg>
                   Escanear abordaje
