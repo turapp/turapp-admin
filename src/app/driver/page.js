@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { supabase } from '../../lib/supabaseClient';
+import { subscribeDriverToPush } from '../../lib/webPush';
 import DriverBottomNav from '../../components/DriverBottomNav';
 
 const Map = dynamic(() => import('../../components/Map'), { ssr: false, loading: () => <div style={{ background: '#eee', height: '100%' }} /> });
@@ -18,11 +19,14 @@ export default function DriverDashboard() {
   const [pin, setPin] = useState(['', '', '', '']);
   const [driverLoc, setDriverLoc] = useState([3.8850, -77.0250]); // Buenaventura real (antes 4.88, mal ubicado — mismo bug de la app de pasajeros)
   const [currentTrip, setCurrentTrip] = useState(null);
+  const [currentOfferId, setCurrentOfferId] = useState(null);
   const [riderProfile, setRiderProfile] = useState(null);
   const [pinError, setPinError] = useState(false);
   const [user, setUser] = useState(null);
   const [tripSummary, setTripSummary] = useState(null);
   const [todayStats, setTodayStats] = useState({ total: 0, count: 0 });
+  const [riderRatingStars, setRiderRatingStars] = useState(5);
+  const [submittingRiderRating, setSubmittingRiderRating] = useState(false);
 
   useEffect(() => {
     if (!currentTrip?.rider_id) { setRiderProfile(null); return; }
@@ -80,32 +84,60 @@ export default function DriverDashboard() {
 
   // Listen for new trips when online
   useEffect(() => {
-    if (step === 'online') {
+    if (step === 'online' && user) {
+      // Antes esto escuchaba CUALQUIER trips INSERT con status='requested' —
+      // es decir, todo conductor en línea se enteraba de TODOS los viajes
+      // pedidos en Buenaventura, sin importar a quién se lo asignó
+      // assign-driver realmente. Ahora escucha solo las ofertas que el
+      // backend le mandó específicamente a este conductor via trip_offers.
       const channel = supabase
-        .channel('public:trips')
-        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trips', filter: "status=eq.requested" }, (payload) => {
-          console.log('Nuevo viaje detectado:', payload.new);
-          setCurrentTrip(payload.new);
-          setCountdown(15);
+        .channel(`trip_offers:driver_id=eq.${user.id}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'trip_offers', filter: `driver_id=eq.${user.id}` }, async (payload) => {
+          const offer = payload.new;
+          if (offer.status !== 'pending') return;
+          const { data: trip } = await supabase.from('trips').select('*').eq('id', offer.trip_id).single();
+          if (!trip || trip.status !== 'requested') return;
+          setCurrentTrip(trip);
+          setCurrentOfferId(offer.id);
+          const secondsLeft = Math.max(1, Math.round((new Date(offer.expires_at).getTime() - Date.now()) / 1000));
+          setCountdown(secondsLeft);
           setStep('incoming');
         })
         .subscribe();
       return () => { supabase.removeChannel(channel); }
     }
-  }, [step]);
+  }, [step, user]);
 
-  // Handle incoming countdown
+  // Suscribe a push la primera vez que el conductor se conecta, para que
+  // le lleguen notificaciones de viajes nuevos incluso con la pestaña en
+  // segundo plano o el celular bloqueado (Realtime por sí solo requiere
+  // que la pestaña esté activa).
+  useEffect(() => {
+    if (step === 'online' && user) {
+      subscribeDriverToPush(user.id);
+    }
+  }, [step, user]);
+
+  // Handle incoming countdown — si se agota el tiempo, la oferta se marca
+  // 'expired' del lado del conductor. Nota: el backend todavía no re-ofrece
+  // el viaje al siguiente conductor más cercano automáticamente (eso
+  // requeriría un cron/scheduled function aparte); por ahora el pasajero se
+  // queda esperando hasta que otro conductor lo tome o cancele.
   useEffect(() => {
     let timer;
     if (step === 'incoming' && countdown > 0) {
       timer = setInterval(() => setCountdown(c => c - 1), 1000);
     } else if (countdown === 0 && step === 'incoming') {
+      if (currentOfferId) {
+        supabase.from('trip_offers').update({ status: 'expired', responded_at: new Date().toISOString() }).eq('id', currentOfferId);
+      }
       setStep('online');
       setCountdown(15);
       setCurrentTrip(null);
+      setCurrentOfferId(null);
     }
     return () => clearInterval(timer);
-  }, [step, countdown]);
+  }, [step, countdown, currentOfferId]);
 
   const triggerIncoming = () => {
     setCountdown(12);
@@ -368,12 +400,16 @@ export default function DriverDashboard() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
               <button onClick={async () => {
-                // No actualiza el viaje en la BD: al no encontrar más
-                // conductor asignado, el pasajero se queda esperando sin
-                // saber que fue rechazado. Suficiente por ahora para que el
-                // conductor pueda seguir viendo otras solicitudes.
+                // Marca la oferta como rechazada. El backend todavía no
+                // re-ofrece automáticamente al siguiente conductor más
+                // cercano (eso necesitaría un cron aparte) — el pasajero
+                // sigue esperando hasta que otro conductor la tome.
+                if (currentOfferId) {
+                  await supabase.from('trip_offers').update({ status: 'rejected', responded_at: new Date().toISOString() }).eq('id', currentOfferId);
+                }
                 setStep('online');
                 setCurrentTrip(null);
+                setCurrentOfferId(null);
               }} style={{ height: '56px', borderRadius: '16px', border: '2px solid #eaeae8', color: '#111', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 Rechazar
               </button>
@@ -394,7 +430,11 @@ export default function DriverDashboard() {
                   alert("Otro conductor ya aceptó este viaje.");
                   setStep('online');
                   setCurrentTrip(null);
+                  setCurrentOfferId(null);
                   return;
+                }
+                if (currentOfferId) {
+                  await supabase.from('trip_offers').update({ status: 'accepted', responded_at: new Date().toISOString() }).eq('id', currentOfferId);
                 }
                 setCurrentTrip(data[0]);
                 setStep('pickup');
@@ -513,6 +553,7 @@ export default function DriverDashboard() {
                 if (error) { alert("Error: " + error.message); return; }
                 setStep('online');
                 setCurrentTrip(null);
+                setCurrentOfferId(null);
                 setPin(['', '', '', '']);
               }} style={{ font: '700 15px Manrope,sans-serif', color: '#c8402f' }}>No apareció</button>
               <button onClick={async () => {
@@ -663,24 +704,43 @@ export default function DriverDashboard() {
           <div style={{ font: '800 15px Manrope,sans-serif', color: '#111', marginBottom: '16px' }}>Califica a {riderProfile?.first_name || 'tu pasajero'}</div>
           <div style={{ display: 'flex', gap: '8px', marginBottom: 'auto' }}>
             {[1, 2, 3, 4, 5].map(i => (
-              <div key={i} style={{ flex: 1, height: '48px', borderRadius: '8px', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="#d1d1d1"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-              </div>
+              <button key={i} onClick={() => setRiderRatingStars(i)} style={{ flex: 1, height: '48px', borderRadius: '8px', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill={i <= riderRatingStars ? '#f5a623' : '#d1d1d1'}><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+              </button>
             ))}
           </div>
-          
+
           <button
-            onClick={() => {
+            disabled={submittingRiderRating}
+            onClick={async () => {
+              setSubmittingRiderRating(true);
+              try {
+                if (currentTrip?.id) {
+                  const { error } = await supabase.functions.invoke('rate-trip', {
+                    body: { trip_id: currentTrip.id, rating: riderRatingStars, target: 'rider' },
+                  });
+                  if (error) {
+                    const body = await error.context?.json?.().catch(() => null);
+                    throw new Error(body?.error || error.message);
+                  }
+                }
+              } catch (err) {
+                alert('No se pudo enviar la calificación: ' + err.message);
+              } finally {
+                setSubmittingRiderRating(false);
+              }
               setCurrentTrip(null);
+              setCurrentOfferId(null);
               setRiderProfile(null);
               setTripSummary(null);
               setPin(['', '', '', '']);
               setPinError(false);
+              setRiderRatingStars(5);
               setStep('online');
             }}
-            style={{ width: '100%', height: '56px', borderRadius: '16px', background: '#0f8a6d', color: '#fff', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '32px' }}
+            style={{ width: '100%', height: '56px', borderRadius: '16px', background: '#0f8a6d', color: '#fff', font: '800 16px Manrope,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: '32px', opacity: submittingRiderRating ? 0.6 : 1 }}
           >
-            Volver a recibir viajes
+            {submittingRiderRating ? 'Enviando...' : 'Volver a recibir viajes'}
           </button>
         </div>
       )}
