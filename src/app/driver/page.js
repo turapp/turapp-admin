@@ -136,8 +136,14 @@ export default function DriverDashboard() {
     if (step === 'incoming' && countdown > 0) {
       timer = setInterval(() => setCountdown(c => c - 1), 1000);
     } else if (countdown === 0 && step === 'incoming') {
+      const tripId = currentTrip?.id;
       if (currentOfferId) {
         supabase.from('trip_offers').update({ status: 'expired', responded_at: new Date().toISOString() }).eq('id', currentOfferId);
+      }
+      // Igual que al rechazar: el viaje pasa al siguiente conductor.
+      if (tripId) {
+        supabase.functions.invoke('reoffer-trip', { body: { trip_id: tripId } })
+          .catch((e) => console.error('Error re-ofreciendo el viaje:', e));
       }
       setStep('online');
       setCountdown(15);
@@ -145,7 +151,7 @@ export default function DriverDashboard() {
       setCurrentOfferId(null);
     }
     return () => clearInterval(timer);
-  }, [step, countdown, currentOfferId]);
+  }, [step, countdown, currentOfferId, currentTrip?.id]);
 
   const triggerIncoming = () => {
     setCountdown(12);
@@ -408,12 +414,16 @@ export default function DriverDashboard() {
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '12px' }}>
               <button onClick={async () => {
-                // Marca la oferta como rechazada. El backend todavía no
-                // re-ofrece automáticamente al siguiente conductor más
-                // cercano (eso necesitaría un cron aparte) — el pasajero
-                // sigue esperando hasta que otro conductor la tome.
+                const tripId = currentTrip?.id;
                 if (currentOfferId) {
                   await supabase.from('trip_offers').update({ status: 'rejected', responded_at: new Date().toISOString() }).eq('id', currentOfferId);
+                }
+                // Pasa el viaje al siguiente conductor más cercano. Si no
+                // queda ninguno, reoffer-trip lo cancela para que el pasajero
+                // salga del "Buscando conductor..." en vez de esperar sin fin.
+                if (tripId) {
+                  supabase.functions.invoke('reoffer-trip', { body: { trip_id: tripId } })
+                    .catch((e) => console.error('Error re-ofreciendo el viaje:', e));
                 }
                 setStep('online');
                 setCurrentTrip(null);
