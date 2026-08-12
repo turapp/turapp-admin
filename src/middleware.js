@@ -61,7 +61,7 @@ export async function middleware(request) {
         url.pathname = '/driver';
         return NextResponse.redirect(url);
       }
-      url.pathname = '/home';
+      url.pathname = '/';
       return NextResponse.redirect(url);
     }
     return response;
@@ -91,7 +91,7 @@ export async function middleware(request) {
 
     // Si no es conductor, redirigir a home de pasajero
     if (profile?.role !== 'driver') {
-      url.pathname = '/home';
+      url.pathname = '/';
       return NextResponse.redirect(url);
     }
 

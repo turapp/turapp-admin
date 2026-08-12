@@ -89,7 +89,7 @@ export default function SeatMapPage() {
       
       // Confirm and go back or to a success page
       alert('¡Puesto reservado exitosamente!');
-      router.push('/home');
+      router.push('/cali');
     } catch (err) {
       alert('Error reservando puesto. Puede que alguien más lo haya tomado.');
       console.error(err);
