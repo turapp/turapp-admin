@@ -27,6 +27,14 @@ export default function DriverDashboard() {
   const [todayStats, setTodayStats] = useState({ total: 0, count: 0 });
   const [riderRatingStars, setRiderRatingStars] = useState(5);
   const [submittingRiderRating, setSubmittingRiderRating] = useState(false);
+  // Tiempo real de espera al pasajero. Antes era un "1:42" fijo en pantalla.
+  const [waitSeconds, setWaitSeconds] = useState(0);
+
+  useEffect(() => {
+    if (step !== 'waiting') { setWaitSeconds(0); return; }
+    const t = setInterval(() => setWaitSeconds((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [step]);
 
   useEffect(() => {
     if (!currentTrip?.rider_id) { setRiderProfile(null); return; }
@@ -451,16 +459,18 @@ export default function DriverDashboard() {
         <div style={{ position: 'absolute', inset: 0, zIndex: 100, display: 'flex', flexDirection: 'column', pointerEvents: 'none' }}>
           {/* Top Banner */}
           <div style={{ background: '#0f8a6d', color: '#fff', padding: '60px 24px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', pointerEvents: 'auto' }}>
-            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5"><polyline points="12 19 12 5"/><polyline points="5 12 12 5 19 12"/></svg>
-              <div>
-                <div style={{ font: '800 24px Manrope,sans-serif' }}>450 m</div>
-                <div style={{ font: '600 15px Manrope,sans-serif', opacity: 0.9 }}>Continúa por Calle 5</div>
+            {/* Antes aquí había una navegación falsa ("450 m", "Continúa por
+                Calle 5", "3 min"): no hay motor de rutas, así que eran
+                valores fijos que podían mandar al conductor por donde no era.
+                Se muestra la dirección real de recogida. */}
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center', minWidth: 0 }}>
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" style={{ flex: 'none' }}><polyline points="12 19 12 5"/><polyline points="5 12 12 5 19 12"/></svg>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ font: '600 12px Manrope,sans-serif', opacity: 0.9 }}>Vas a recoger en</div>
+                <div style={{ font: '800 18px Manrope,sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {currentTrip?.pickup_address || 'Punto de recogida'}
+                </div>
               </div>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ font: '800 20px Manrope,sans-serif' }}>3 min</div>
-              <div style={{ font: '600 12px Manrope,sans-serif', opacity: 0.9 }}>a la recogida</div>
             </div>
           </div>
 
@@ -508,7 +518,9 @@ export default function DriverDashboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', font: '700 16px Manrope,sans-serif', color: '#c98a1e' }}>
               🕒 Esperando al pasajero
             </div>
-            <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>1:42</div>
+            <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>
+              {Math.floor(waitSeconds / 60)}:{String(waitSeconds % 60).padStart(2, '0')}
+            </div>
           </div>
 
           <div style={{ marginTop: 'auto', background: '#fff', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', padding: '24px', pointerEvents: 'auto', boxShadow: '0 -4px 32px rgba(0,0,0,0.1)' }}>
