@@ -28,15 +28,26 @@ export async function middleware(request) {
   // Obtener sesión actual
   const { data: { user } } = await supabase.auth.getUser();
 
-  // --- Rewrite por subdominio (driver.turapp.co → /driver) ---
+  // --- Aislamiento por subdominio ---
+  // driver.turapp.co es SOLO la app de conductor. El panel de admin vive en
+  // el mismo despliegue (mismo repo), así que sin esto driver.turapp.co/admin,
+  // /drivers, /payments, /reports… se servían igual: el panel de
+  // administración quedaba publicado en el dominio de los conductores.
   const host = request.headers.get('host') || '';
-  if (pathname === '/' && host.includes('driver.')) {
-    if (!user) {
-      url.pathname = '/driver/onboarding';
+  if (host.includes('driver.')) {
+    if (pathname === '/') {
+      if (!user) {
+        url.pathname = '/driver/onboarding';
+        return NextResponse.redirect(url);
+      }
+      url.pathname = '/driver';
+      return NextResponse.rewrite(url);
+    }
+    // Cualquier ruta fuera de /driver/* no existe en este dominio.
+    if (!pathname.startsWith('/driver')) {
+      url.pathname = user ? '/driver' : '/driver/onboarding';
       return NextResponse.redirect(url);
     }
-    url.pathname = '/driver';
-    return NextResponse.rewrite(url);
   }
 
   // --- Rutas públicas: si ya está autenticado, redirigir al home ---
