@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
 import DriverBottomNav from '../../../components/DriverBottomNav';
+import { SERVICIOS, ORDEN, escenaServicio } from '../../../lib/servicios';
 
 // ============================================================
 // SERVICIOS DEL CONDUCTOR
@@ -15,42 +16,15 @@ import DriverBottomNav from '../../../components/DriverBottomNav';
 //
 // Se muestran los requisitos ANTES de que pida, para que nadie solicite algo
 // que no va a poder cumplir y quede esperando una aprobación que no llegará.
+//
+// Cada tarjeta se ve como su servicio —su color, su pieza 3D, su promesa— y
+// sale de lib/servicios.js, el mismo sitio del que come la bienvenida que le
+// aparecerá cuando se lo aprueben. Antes esta lista estaba escrita aparte y
+// los dos textos ya se habían separado entre sí.
 
-const SERVICIOS = [
-  {
-    id: 'taxi',
-    icono: '🚕',
-    nombre: 'Taxi en la ciudad',
-    desc: 'Llevas pasajeros dentro de Buenaventura.',
-    requisitos: ['Placa amarilla', 'Licencia C1 o superior', 'SOAT y tecnomecánica al día'],
-    gancho: 'Tarifa del Decreto 0048 + el bono que te deje el pasajero.',
-  },
-  {
-    id: 'cali',
-    icono: '🚐',
-    nombre: 'Viajes a Cali',
-    desc: 'Llevas pasajeros a Cali y de regreso.',
-    requisitos: ['Placa blanca autorizada', 'Licencia C1 o superior', 'Seguro vigente'],
-    gancho: 'Cobras por puesto. Con el Plan Cali te quedas con el 100%.',
-  },
-  {
-    id: 'favor',
-    icono: '📦',
-    nombre: 'Tura Favor',
-    desc: 'Llevas encomiendas dentro de Buenaventura: sobres, paquetes, lo que quepa.',
-    requisitos: ['Bicicleta, moto o carro', 'Cédula al día'],
-    gancho: 'No necesitas carro. Con bicicleta o moto también trabajas.',
-    vehiculos: true,
-  },
-  {
-    id: 'encomienda_intermunicipal',
-    icono: '🚚',
-    nombre: 'Encomiendas fuera de la ciudad',
-    desc: 'Llevas paquetes a Cali y otros destinos.',
-    requisitos: ['Placa blanca autorizada', 'Seguro vigente'],
-    gancho: 'Se suma a lo que ya ganas llevando pasajeros.',
-  },
-];
+// Único servicio donde tiene sentido preguntar con qué vehículo: en los otros
+// el vehículo ya está determinado por el tipo de placa.
+const PREGUNTA_VEHICULO = { favor: true };
 
 const VEHICULOS = [
   ['bici', 'Bicicleta', '🚲'],
@@ -152,34 +126,46 @@ export default function Servicios() {
         </div>
 
         <div style={{ margin: '18px 20px 0' }}>
-          {SERVICIOS.map((s) => {
+          {ORDEN.map((id) => {
+            const s = SERVICIOS[id];
             const est = estadoDe(s.id);
             const activo = est === 'activo';
             const revision = est === 'revision';
             return (
               <div key={s.id}
-                style={{ padding: '17px', borderRadius: '18px', marginBottom: '11px',
-                  border: activo ? '2px solid #0f8a6d' : '1px solid #eaeae8',
-                  background: activo ? '#f0faf7' : '#fff' }}>
+                style={{ borderRadius: '20px', marginBottom: '13px', overflow: 'hidden',
+                  border: activo ? `2px solid ${s.acento}` : '1px solid #eaeae8',
+                  background: '#fff',
+                  boxShadow: activo ? `0 10px 26px ${s.acentoSuave.replace('.12', '.28')}` : '0 4px 14px rgba(0,0,0,.05)' }}>
 
-                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                  <div style={{ fontSize: '26px', flex: 'none' }}>{s.icono}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                      <div style={{ font: '800 15.5px Manrope,sans-serif', letterSpacing: '-.02em' }}>{s.nombre}</div>
-                      {activo && <Chip texto="Activo" bg="#0f8a6d" color="#fff" />}
-                      {revision && <Chip texto="En revisión" bg="rgba(201,138,30,.14)" color="#c98a1e" />}
-                      {est === 'pausado' && <Chip texto="Pausado" bg="#f4f4f3" color="#666" />}
+                {/* La cara del servicio: su color y su pieza 3D flotando. Es
+                    lo que hace que el conductor reconozca de un vistazo cuál
+                    es cuál sin tener que leer. */}
+                <div style={{ ...escenaServicio(s), position: 'relative', height: '104px', overflow: 'hidden', padding: '15px 17px', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                  <img src={s.imagen} alt="" style={{
+                    position: 'absolute', right: '6px', bottom: '-8px', width: '104px', height: '104px',
+                    objectFit: 'contain', opacity: .95, pointerEvents: 'none',
+                    filter: 'drop-shadow(0 14px 18px rgba(0,0,0,.32))',
+                    animation: 'trFloat 5.4s ease-in-out infinite',
+                  }} />
+                  <div style={{ position: 'relative', zIndex: 2, maxWidth: '66%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap', marginBottom: '3px' }}>
+                      {activo && <Chip texto="Activo" bg="rgba(255,255,255,.25)" color="#fff" />}
+                      {revision && <Chip texto="En revisión" bg="rgba(255,255,255,.25)" color="#fff" />}
+                      {est === 'pausado' && <Chip texto="Pausado" bg="rgba(255,255,255,.25)" color="#fff" />}
                     </div>
-                    <div style={{ font: '500 12.5px/1.5 Manrope,sans-serif', color: '#666', marginTop: '4px' }}>{s.desc}</div>
-                    <div style={{ font: '600 11.5px/1.5 Manrope,sans-serif', color: '#0f8a6d', marginTop: '6px' }}>{s.gancho}</div>
+                    <div style={{ font: '800 17px/1.2 Manrope,sans-serif', letterSpacing: '-.03em', color: '#fff' }}>{s.nombreLargo}</div>
+                    <div style={{ font: '600 11.5px/1.4 Manrope,sans-serif', color: 'rgba(255,255,255,.86)', marginTop: '3px' }}>{s.tagline}</div>
                   </div>
                 </div>
+
+                <div style={{ padding: '15px 17px 17px' }}>
+                <div style={{ font: '500 12.5px/1.55 Manrope,sans-serif', color: '#555' }}>{s.promesa}</div>
 
                 {/* Requisitos antes de pedir, no después de esperar */}
                 <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '12px 0 0' }}>
                   {s.requisitos.map((r, i) => (
-                    <span key={i} style={{ padding: '4px 9px', borderRadius: '99px', background: '#f7f7f5', color: '#666', font: '600 10.5px Manrope,sans-serif' }}>{r}</span>
+                    <span key={i} style={{ padding: '4px 9px', borderRadius: '99px', background: s.acentoSuave, color: s.acento, font: '600 10.5px Manrope,sans-serif' }}>{r}</span>
                   ))}
                 </div>
 
@@ -207,9 +193,9 @@ export default function Servicios() {
 
                 <div style={{ marginTop: '13px' }}>
                   {est === 'no' && (
-                    <button onClick={() => (s.vehiculos ? setEligiendo(eligiendo === s.id ? null : s.id) : solicitar(s.id))} disabled={busy === s.id}
-                      style={{ width: '100%', height: '44px', borderRadius: '13px', background: '#111', color: '#fff', font: '800 13.5px Manrope,sans-serif', border: 'none', cursor: 'pointer' }}>
-                      {busy === s.id ? 'Un momento…' : 'Quiero este servicio'}
+                    <button onClick={() => (PREGUNTA_VEHICULO[s.id] ? setEligiendo(eligiendo === s.id ? null : s.id) : solicitar(s.id))} disabled={busy === s.id}
+                      style={{ width: '100%', height: '46px', borderRadius: '14px', background: s.acento, color: '#fff', font: '800 13.5px Manrope,sans-serif', border: 'none', cursor: 'pointer', boxShadow: `0 7px 18px ${s.acentoSuave.replace('.12', '.4')}` }}>
+                      {busy === s.id ? 'Un momento…' : `Quiero recibir ${s.trabajo.varios}`}
                     </button>
                   )}
                   {revision && (
@@ -225,10 +211,11 @@ export default function Servicios() {
                   )}
                   {est === 'pausado' && (
                     <button onClick={() => solicitar(s.id)} disabled={busy === s.id}
-                      style={{ width: '100%', height: '44px', borderRadius: '13px', background: '#0f8a6d', color: '#fff', font: '800 13.5px Manrope,sans-serif', border: 'none', cursor: 'pointer' }}>
+                      style={{ width: '100%', height: '46px', borderRadius: '14px', background: s.acento, color: '#fff', font: '800 13.5px Manrope,sans-serif', border: 'none', cursor: 'pointer' }}>
                       Reactivar
                     </button>
                   )}
+                </div>
                 </div>
               </div>
             );
