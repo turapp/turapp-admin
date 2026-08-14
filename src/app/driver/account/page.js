@@ -88,6 +88,20 @@ export default function DriverAccountPage() {
           </div>
         </div>
 
+        {/* Trae conductores — el gancho de crecimiento del lado del conductor.
+            Va antes del menú porque es lo que queremos que vea primero. */}
+        <button onClick={() => router.push('/driver/referidos')}
+          style={{ width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer', marginBottom: '16px', padding: '17px 19px', borderRadius: '20px', background: 'linear-gradient(135deg,#0d2b22 0%,#0f8a6d 100%)', color: '#fff', display: 'flex', alignItems: 'center', gap: '13px' }}>
+          <div style={{ fontSize: '24px', flex: 'none' }}>🚕</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: '800 15px Manrope,sans-serif', letterSpacing: '-.02em' }}>Trae conductores y gana</div>
+            <div style={{ font: '500 11.5px/1.45 Manrope,sans-serif', opacity: .8, marginTop: '3px' }}>
+              Comisión por cada viaje que hagan, sin límite de tiempo.
+            </div>
+          </div>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" style={{ flex: 'none', opacity: .7 }}><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
         {/* Menu Items */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <button onClick={() => router.push('/driver/onboarding')} style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px', borderRadius: '20px', background: '#fff', border: '1px solid #eaeae8', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', transition: 'all 0.2s ease', cursor: 'pointer' }}>

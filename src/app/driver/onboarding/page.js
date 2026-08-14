@@ -191,6 +191,11 @@ export default function OnboardingPage() {
       // 3. Actualizar User Profile
       await supabase.from('profiles').update({ role: 'driver', is_approved: false }).eq('id', userId);
 
+      // Arranca su secuencia de correos de conductor. Va sin await a
+      // propósito: si MailerLite falla, el registro no se cae.
+      supabase.functions.invoke('mailerlite-suscribir', { body: {} })
+        .catch((e) => console.error('MailerLite:', e));
+
       setStep(5);
     } catch (error) {
       console.error("Error finalizando onboarding:", error);
