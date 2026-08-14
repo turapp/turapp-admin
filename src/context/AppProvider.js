@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import ThemeToggle from '../components/ThemeToggle';
 
 const AppContext = createContext();
 
@@ -31,6 +32,7 @@ export function AppProvider({ children }) {
     <AppContext.Provider value={{ theme, toggleTheme, lang, changeLang }}>
       <div className="tr-app" data-theme={theme} style={{ width: '100%', height: '100vh', display: 'flex' }}>
         {children}
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
       </div>
     </AppContext.Provider>
   );
