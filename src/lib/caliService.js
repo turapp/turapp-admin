@@ -1,115 +1,106 @@
 import { supabase } from './supabaseClient';
 
+// ============================================================
+// VIAJES A CALI — LADO DEL CONDUCTOR
+// ============================================================
+// Esta copia pedía columnas que no existen: `price_block` (la real es
+// `current_price`) y `vehicles ( license_plate )` (la real es `plate`).
+// PostgREST respondía con error, el catch devolvía [] y el conductor veía
+// "No tienes viajes programados" para siempre — tuviera o no salidas.
+//
+// Los puestos NO se crean desde aquí: los crea un trigger al insertar la
+// salida (migración 20260814000003). Antes no los creaba nadie y cada salida
+// publicada nacía sin puestos, así que nadie la podía reservar.
+
 export const caliService = {
-  // Obtener salidas con datos del vehículo y conductor
-  async getDepartures() {
-    const { data, error } = await supabase
-      .from('cali_departures')
-      .select(`
-        id,
-        departure_time,
-        price_block,
-        status,
-        vehicles ( license_plate ),
-        driver_profiles (
-          profiles ( first_name, last_name )
-        ),
-        cali_seats ( status )
-      `)
-      .order('departure_time', { ascending: true });
-
-    if (error) {
-      console.error('Error fetching departures:', error.message, error.details, error.hint);
-      return [];
-    }
-
-    return data;
-  },
-
-  // Obtener salidas de un conductor específico
   async getDriverDepartures(driverId) {
     const { data, error } = await supabase
       .from('cali_departures')
       .select(`
         id,
         departure_time,
-        price_block,
+        current_price,
+        current_block,
+        total_seats,
+        occupied_seats,
         status,
-        vehicles ( license_plate ),
-        cali_seats ( status )
+        vehicles ( plate, make, model ),
+        cali_seats ( id, seat_number, status )
       `)
       .eq('driver_id', driverId)
       .order('departure_time', { ascending: true });
 
     if (error) {
-      console.error('Error fetching driver departures:', error.message, error.details, error.hint);
+      console.error('Error cargando salidas del conductor:', error.message, error.details, error.hint);
       return [];
     }
+    return data ?? [];
+  },
 
+  // Publicar una salida. Hasta ahora no había forma de hacerlo desde ninguna
+  // pantalla: el conductor podía ver Viajes a Cali pero nunca ofrecer una.
+  async publicarSalida({ driverId, vehicleId, salidaISO, precio, puestos }) {
+    const { data, error } = await supabase
+      .from('cali_departures')
+      .insert({
+        driver_id: driverId,
+        vehicle_id: vehicleId,
+        departure_time: salidaISO,
+        current_price: precio,
+        price_block_1: precio,
+        total_seats: puestos,
+        status: 'scheduled',
+      })
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
     return data;
   },
 
-  // Obtener estado de los asientos para un viaje específico
+  async cancelarSalida(departureId) {
+    const { error } = await supabase
+      .from('cali_departures')
+      .update({ status: 'cancelled' })
+      .eq('id', departureId);
+    if (error) throw new Error(error.message);
+  },
+
   async getSeats(departureId) {
     const { data, error } = await supabase
       .from('cali_seats')
       .select('*')
       .eq('departure_id', departureId)
       .order('seat_number', { ascending: true });
-      
+
     if (error) {
-      console.error('Error fetching seats:', error);
+      console.error('Error cargando puestos:', error.message);
       return [];
     }
-    return data;
+    return data ?? [];
   },
 
-  // Reservar un asiento
-  async reserveSeat(seatId, riderId, price) {
-    // 30% del precio total como abono
-    const deposit = price * 0.3;
-    const balance = price * 0.7;
-
-    const { data, error } = await supabase
-      .from('cali_seats')
-      .update({ 
-        status: 'reserved', 
-        rider_id: riderId,
-        deposit_paid: deposit,
-        balance_due: balance
-      })
-      .eq('id', seatId)
-      .eq('status', 'available') // Optimistic concurrency check
-      .select()
-      .single();
-
-    if (error) {
-      console.error('Error reserving seat:', error);
-      throw error;
-    }
-    return data;
+  // El vehículo con el que puede hacer viajes a Cali.
+  async getVehiculoCali(driverId) {
+    const { data } = await supabase
+      .from('vehicles')
+      .select('id, plate, make, model, category')
+      .eq('driver_id', driverId)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    return (data ?? []).find(v => v.category === 'cali') ?? (data ?? [])[0] ?? null;
   },
 
-  // Suscribirse a cambios en los asientos en tiempo real
   subscribeToSeats(departureId, callback) {
     const subscription = supabase
       .channel(`seats-${departureId}`)
       .on(
         'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'cali_seats',
-          filter: `departure_id=eq.${departureId}`
-        },
-        (payload) => {
-          callback(payload.new);
-        }
+        { event: 'UPDATE', schema: 'public', table: 'cali_seats', filter: `departure_id=eq.${departureId}` },
+        (payload) => callback(payload.new)
       )
       .subscribe();
 
-    return () => {
-      supabase.removeChannel(subscription);
-    };
-  }
+    return () => { supabase.removeChannel(subscription); };
+  },
 };
