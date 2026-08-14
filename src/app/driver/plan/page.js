@@ -1,158 +1,248 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
 
+// ============================================================
+// TURAPP PRO — suscripción del conductor
+// ============================================================
+// La persuasión aquí no es una promesa vaga ("¡recibe más viajes!"), sino
+// mostrarle SU puntaje real y cuánto le falta. Ver "estás en 55 de 100 y la
+// suscripción te suma 30" convence más que cualquier adjetivo, y además es
+// verdad: es exactamente lo que calcula puntaje_prioridad() en la base.
+//
+// Las comodidades están en la misma pantalla a propósito: son puntos GRATIS.
+// Que el conductor los active primero genera confianza en que el sistema no
+// es solo un peaje.
+
+const COMODIDADES = [
+  ['aire_acondicionado', 'Aire acondicionado', '❄️'],
+  ['cargador', 'Cargador de celular', '🔌'],
+  ['agua', 'Agua para el pasajero', '💧'],
+  ['wifi', 'WiFi a bordo', '📶'],
+  ['musica_a_gusto', 'Música a gusto del pasajero', '🎵'],
+  ['espacio_equipaje', 'Espacio para equipaje', '🧳'],
+  ['silla_bebe', 'Silla para bebé', '👶'],
+  ['acepta_mascotas', 'Acepta mascotas', '🐾'],
+];
+
+const money = (n) => '$' + Math.round(Number(n) || 0).toLocaleString('es-CO');
+
 export default function PlanPage() {
   const router = useRouter();
-  const [currentPlan, setCurrentPlan] = useState('free'); // 'free' or 'premium'
-  const [isPaying, setIsPaying] = useState(false);
   const [userId, setUserId] = useState(null);
+  const [sub, setSub] = useState(null);
+  const [puntaje, setPuntaje] = useState(null);
+  const [detalle, setDetalle] = useState(null);
+  const [amen, setAmen] = useState({});
+  const [precio, setPrecio] = useState(29990);
+  const [cargando, setCargando] = useState(true);
+  const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
-      if (!data?.user) return;
-      setUserId(data.user.id);
-      const { data: plan } = await supabase.from('driver_plans').select('plan_type').eq('driver_id', data.user.id).single();
-      if (plan) setCurrentPlan(plan.plan_type);
-    });
+  const cargar = useCallback(async (uid) => {
+    const [{ data: s }, { data: p }, { data: dp }, { data: a }, { data: cfg }] = await Promise.all([
+      supabase.from('driver_subscriptions').select('*').eq('driver_id', uid).eq('estado', 'activa').order('vence_at', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('profiles').select('rating').eq('id', uid).single(),
+      supabase.from('driver_profiles').select('acceptance_rate').eq('id', uid).single(),
+      supabase.from('driver_amenities').select('*').eq('driver_id', uid).maybeSingle(),
+      supabase.from('app_settings').select('key, value').eq('key', 'suscripcion_precio').maybeSingle(),
+    ]);
+
+    const activa = s && new Date(s.vence_at) > new Date();
+    setSub(activa ? s : null);
+    setAmen(a || {});
+    if (cfg?.value) setPrecio(Number(cfg.value));
+
+    // Mismo cálculo que puntaje_prioridad() en la base, replicado aquí para
+    // poder desglosarlo visualmente. Si cambia allá, cambiar acá.
+    const rating = Number(p?.rating ?? 5);
+    const acept = Number(dp?.acceptance_rate ?? 100);
+    const nAmen = COMODIDADES.reduce((acc, [k]) => acc + (a?.[k] ? 1 : 0), 0);
+    const d = {
+      suscripcion: activa ? 30 : 0,
+      calificacion: Math.min(30, (rating / 5) * 30),
+      aceptacion: Math.min(25, (acept / 100) * 25),
+      comodidades: Math.min(15, nAmen * 1.875),
+      rating, acept, nAmen,
+    };
+    setDetalle(d);
+    setPuntaje(Math.round(d.suscripcion + d.calificacion + d.aceptacion + d.comodidades));
+    setCargando(false);
   }, []);
 
-  // NOTA: esto todavía no cobra de verdad — actualiza el plan directo en la
-  // base de datos. Falta conectar la suscripción recurrente real (ePayco u
-  // otro) antes de lanzar esto a producción; por ahora deja al conductor
-  // pasar a Premium sin que se le cobre, para poder probar la función.
-  const handleUpgrade = async () => {
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      if (!data?.user) return;
+      setUserId(data.user.id);
+      cargar(data.user.id);
+    });
+  }, [cargar]);
+
+  const alternarComodidad = async (clave) => {
     if (!userId) return;
-    setIsPaying(true);
-    const { error } = await supabase.from('driver_plans').upsert({
-      driver_id: userId,
-      plan_type: 'premium',
-      commission_rate: 0,
-      monthly_fee: 60000,
-    }, { onConflict: 'driver_id' });
-    setIsPaying(false);
-    if (error) { alert('No se pudo cambiar de plan: ' + error.message); return; }
-    setCurrentPlan('premium');
+    const nuevo = !amen[clave];
+    setAmen((a) => ({ ...a, [clave]: nuevo }));
+    const { error } = await supabase.from('driver_amenities')
+      .upsert({ driver_id: userId, [clave]: nuevo, updated_at: new Date().toISOString() }, { onConflict: 'driver_id' });
+    if (error) { setAmen((a) => ({ ...a, [clave]: !nuevo })); return; }
+    cargar(userId);
   };
 
+  const suscribirse = async () => {
+    if (!userId) return;
+    setGuardando(true);
+    const vence = new Date();
+    vence.setMonth(vence.getMonth() + 1);
+    const { error } = await supabase.from('driver_subscriptions').insert({
+      driver_id: userId,
+      precio,
+      vence_at: vence.toISOString(),
+      estado: 'pendiente_pago',   // no se activa hasta que el pago entre de verdad
+    });
+    setGuardando(false);
+    if (error) { alert('No se pudo iniciar la suscripción: ' + error.message); return; }
+    alert('Tu solicitud quedó registrada. El cobro se activa cuando conectemos la pasarela de pagos.');
+    cargar(userId);
+  };
+
+  const faltante = puntaje != null ? 100 - puntaje : 0;
+
   return (
-    <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif', paddingBottom: '80px' }}>
-      
-      {/* HEADER */}
-      <div style={{ padding: '60px 24px 24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
-        <button onClick={() => router.back()} style={{ width: '40px', height: '40px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#111" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+    <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif', paddingBottom: '90px' }}>
+
+      <div style={{ padding: '56px 20px 16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+        <button onClick={() => router.back()} style={{ width: '38px', height: '38px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none' }}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#111" strokeWidth="2.5"><path d="M15 18l-6-6 6-6" /></svg>
         </button>
-        <div style={{ font: '800 24px Manrope,sans-serif', letterSpacing: '-0.02em' }}>Tu plan</div>
+        <div style={{ font: '800 21px Manrope,sans-serif', letterSpacing: '-.03em' }}>Tu prioridad</div>
       </div>
 
-      <div style={{ padding: '0 24px' }}>
-        
-        {/* FREE PLAN */}
-        <div style={{ background: '#f8f8f8', borderRadius: '24px', padding: '32px 24px', marginBottom: '24px', position: 'relative', border: '1px solid #eaeae8' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ font: '800 20px Manrope,sans-serif' }}>Plan Gratuito</div>
-            {currentPlan === 'free' && <div style={{ background: '#e0e0e0', color: '#666', font: '800 10px Manrope,sans-serif', padding: '4px 8px', borderRadius: '4px', letterSpacing: '0.05em' }}>ACTUAL</div>}
+      {/* Puntaje real: el argumento de venta más honesto que hay */}
+      <div style={{ margin: '0 20px', padding: '20px', borderRadius: '20px', background: 'linear-gradient(160deg,#111 0%,#2a2a2a 100%)', color: '#fff' }}>
+        <div style={{ font: '600 11px Manrope,sans-serif', opacity: .7, letterSpacing: '.1em' }}>TU PUNTAJE DE PRIORIDAD</div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: '8px', marginTop: '6px' }}>
+          <div style={{ font: '800 46px Manrope,sans-serif', letterSpacing: '-.04em', lineHeight: 1 }}>
+            {cargando ? '—' : puntaje}
           </div>
-          <div style={{ font: '800 28px Manrope,sans-serif', marginBottom: '8px', display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-            15% <span style={{ font: '600 13px Manrope,sans-serif', color: '#666' }}>de comisión por viaje</span>
-          </div>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '24px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '16px', height: '2px', background: '#ccc', marginTop: '10px' }}></div>
-              <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>15% de comisión sobre cada viaje completado</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '16px', height: '2px', background: '#ccc', marginTop: '10px' }}></div>
-              <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Visibilidad estándar en la lista de salidas</div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-              <div style={{ width: '16px', height: '2px', background: '#ccc', marginTop: '10px' }}></div>
-              <div style={{ font: '500 13px Manrope,sans-serif', color: '#666' }}>Soporte en menos de 24 horas</div>
-            </div>
-          </div>
+          <div style={{ font: '600 15px Manrope,sans-serif', opacity: .6, marginBottom: '6px' }}>/ 100</div>
         </div>
+        <div style={{ height: '7px', borderRadius: '4px', background: 'rgba(255,255,255,.15)', overflow: 'hidden', margin: '14px 0 10px' }}>
+          <div style={{ height: '100%', width: `${puntaje || 0}%`, background: '#0f8a6d', transition: 'width .5s ease' }} />
+        </div>
+        <div style={{ font: '500 12.5px/1.5 Manrope,sans-serif', opacity: .85 }}>
+          Entre más alto tu puntaje, antes te llegan los viajes cuando hay varios conductores cerca.
+        </div>
+      </div>
 
-        {/* PREMIUM PLAN */}
-        <div style={{ background: '#0a0a0a', borderRadius: '32px', padding: '32px 24px', color: '#fff', marginBottom: '24px', boxShadow: currentPlan === 'premium' ? '0 16px 40px rgba(15,138,109,0.3)' : '0 16px 40px rgba(0,0,0,0.15)', transition: 'all 0.3s ease' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <div style={{ font: '800 22px Manrope,sans-serif' }}>Turapp Premium</div>
-            <div style={{ background: '#0f8a6d', color: '#fff', font: '800 10px Manrope,sans-serif', padding: '4px 8px', borderRadius: '4px', letterSpacing: '0.05em' }}>
-              {currentPlan === 'premium' ? 'ACTUAL' : 'PREMIUM'}
-            </div>
+      {/* Desglose: qué te suma y qué te falta */}
+      {detalle && (
+        <div style={{ margin: '16px 20px 0' }}>
+          <Barra label="Suscripción Turapp Pro" valor={detalle.suscripcion} max={30}
+                 nota={sub ? 'Activa' : `Te faltan 30 puntos`} activo={!!sub} />
+          <Barra label="Tu calificación" valor={detalle.calificacion} max={30}
+                 nota={`★ ${detalle.rating.toFixed(2)}`} activo />
+          <Barra label="Aceptación de viajes" valor={detalle.aceptacion} max={25}
+                 nota={`${Math.round(detalle.acept)}%`} activo />
+          <Barra label="Comodidades a bordo" valor={detalle.comodidades} max={15}
+                 nota={`${detalle.nAmen} de 8`} activo={detalle.nAmen > 0} />
+        </div>
+      )}
+
+      {/* Suscripción */}
+      {!sub && (
+        <div style={{ margin: '20px', padding: '20px', borderRadius: '20px', border: '2px solid #0f8a6d', background: '#f0faf7' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <div style={{ font: '800 18px Manrope,sans-serif', letterSpacing: '-.02em' }}>Turapp Pro</div>
+            <div style={{ background: '#0f8a6d', color: '#fff', padding: '4px 10px', borderRadius: '99px', font: '700 11px Manrope,sans-serif' }}>+30 puntos</div>
           </div>
-          <div style={{ font: '800 36px Manrope,sans-serif', marginBottom: '4px', display: 'flex', alignItems: 'baseline', gap: '8px', letterSpacing: '-0.02em' }}>
-            $60.000 <span style={{ font: '600 13px Manrope,sans-serif', color: '#aaa', letterSpacing: '0' }}>al mes</span>
+
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px', marginBottom: '14px' }}>
+            <div style={{ font: '800 30px Manrope,sans-serif', letterSpacing: '-.03em', color: '#0f8a6d' }}>{money(precio)}</div>
+            <div style={{ font: '600 13px Manrope,sans-serif', color: '#666' }}>/ mes</div>
           </div>
-          <div style={{ font: '800 14px Manrope,sans-serif', color: '#0f8a6d', marginBottom: '24px' }}>0% de comisión</div>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginTop: '24px', marginBottom: '32px' }}>
-            {[
-              '0% de comisión: recibes el 100% de cada viaje',
-              'Tus salidas aparecen primero en la lista',
-              'Insignia Premium visible para los pasajeros',
-              'Soporte prioritario, respuesta en menos de 1 hora',
-              'Retiros el mismo día y sin límite'
-            ].map((text, idx) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-                <div style={{ width: '18px', height: '18px', borderRadius: '50%', background: '#0f8a6d', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <div style={{ font: '600 13px Manrope,sans-serif' }}>{text}</div>
+
+          {[
+            ['Prioridad en los momentos de alta demanda', 'Cuando hay pocos carros y muchos pasajeros, tú vas primero'],
+            ['Tus comodidades se muestran al pasajero', 'El que ofrece más, se ve más'],
+            ['Tu calificación pesa más en el orden', 'El buen servicio se nota antes'],
+          ].map(([t, s], i) => (
+            <div key={i} style={{ display: 'flex', gap: '10px', marginBottom: '11px' }}>
+              <div style={{ width: '19px', height: '19px', borderRadius: '50%', background: '#0f8a6d', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '700 11px Manrope,sans-serif', flex: 'none', marginTop: '1px' }}>✓</div>
+              <div>
+                <div style={{ font: '700 13px Manrope,sans-serif' }}>{t}</div>
+                <div style={{ font: '500 11.5px/1.4 Manrope,sans-serif', color: '#666', marginTop: '2px' }}>{s}</div>
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
 
-          {currentPlan === 'free' ? (
-            <button 
-              onClick={handleUpgrade} 
-              disabled={isPaying}
-              style={{ width: '100%', padding: '18px', background: '#fff', color: '#111', font: '800 16px Manrope,sans-serif', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-            >
-              {isPaying ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ width: '16px', height: '16px', border: '3px solid #111', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }}></div>
-                  Procesando pago...
-                </div>
-              ) : 'Pasarme a Premium'}
-            </button>
-          ) : (
-            <button disabled style={{ width: '100%', padding: '18px', background: '#333', color: '#fff', font: '800 16px Manrope,sans-serif', borderRadius: '16px' }}>
-              Plan Activo
-            </button>
+          {faltante > 30 && (
+            <div style={{ padding: '11px 13px', borderRadius: '12px', background: '#fff', font: '500 12px/1.5 Manrope,sans-serif', color: '#666', margin: '4px 0 14px' }}>
+              Ojo: la suscripción suma 30, pero <strong style={{ color: '#111' }}>no reemplaza el buen servicio</strong>. Un conductor
+              sin suscripción con buena calificación y comodidades puede quedar por encima de uno suscrito que atiende mal.
+            </div>
           )}
 
+          <button onClick={suscribirse} disabled={guardando}
+            style={{ width: '100%', height: '52px', borderRadius: '15px', background: '#0f8a6d', color: '#fff', font: '800 15px Manrope,sans-serif', border: 'none' }}>
+            {guardando ? 'Un momento…' : `Activar por ${money(precio)} al mes`}
+          </button>
         </div>
+      )}
 
-        {/* SAVINGS SUMMARY */}
-        <div style={{ background: '#e7f3ef', borderRadius: '24px', padding: '24px', color: '#0f8a6d' }}>
-          <div style={{ font: '800 15px Manrope,sans-serif', marginBottom: '16px' }}>Tu cuenta este mes</div>
-          <div style={{ display: 'flex', gap: '16px', marginBottom: '16px' }}>
-            <div style={{ flex: 1, borderRight: '1px solid #cce5dd' }}>
-              <div style={{ font: '600 12px Manrope,sans-serif', marginBottom: '4px' }}>Con plan gratuito</div>
-              <div style={{ font: '800 18px Manrope,sans-serif' }}>-$186.400</div>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ font: '600 12px Manrope,sans-serif', marginBottom: '4px' }}>Con Premium</div>
-              <div style={{ font: '800 18px Manrope,sans-serif' }}>-$60.000</div>
-            </div>
-          </div>
-          <div style={{ font: '600 12px/1.4 Manrope,sans-serif' }}>
-            Con tu volumen actual, Premium te deja <span style={{ font: '800' }}>$126.400 más</span> cada mes.
+      {sub && (
+        <div style={{ margin: '20px', padding: '18px', borderRadius: '18px', background: '#f0faf7', border: '2px solid #0f8a6d' }}>
+          <div style={{ font: '800 16px Manrope,sans-serif', color: '#0f8a6d' }}>Turapp Pro activo</div>
+          <div style={{ font: '500 12.5px Manrope,sans-serif', color: '#666', marginTop: '4px' }}>
+            Renueva el {new Date(sub.vence_at).toLocaleDateString('es-CO', { day: 'numeric', month: 'long' })}
           </div>
         </div>
+      )}
 
+      {/* Comodidades: puntos gratis */}
+      <div style={{ margin: '4px 20px 0' }}>
+        <div style={{ font: '800 16px Manrope,sans-serif', letterSpacing: '-.02em' }}>Comodidades a bordo</div>
+        <div style={{ font: '500 12.5px/1.5 Manrope,sans-serif', color: '#666', margin: '4px 0 14px' }}>
+          Cada una suma casi 2 puntos y <strong style={{ color: '#111' }}>no cuestan nada</strong>. Actívalas solo si de verdad las ofreces:
+          el pasajero las ve antes de subirse.
+        </div>
+
+        {COMODIDADES.map(([clave, label, icono]) => (
+          <div key={clave} onClick={() => alternarComodidad(clave)}
+            style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '13px 14px', borderRadius: '14px', border: amen[clave] ? '2px solid #0f8a6d' : '1px solid #eaeae8', background: amen[clave] ? '#f0faf7' : '#fff', marginBottom: '8px', cursor: 'pointer' }}>
+            <div style={{ fontSize: '19px', flex: 'none' }}>{icono}</div>
+            <div style={{ flex: 1, font: '700 13.5px Manrope,sans-serif' }}>{label}</div>
+            <div style={{ width: '42px', height: '24px', borderRadius: '99px', background: amen[clave] ? '#0f8a6d' : '#e0e0e0', position: 'relative', flex: 'none', transition: 'background .2s' }}>
+              <span style={{ position: 'absolute', top: '3px', left: amen[clave] ? '21px' : '3px', width: '18px', height: '18px', borderRadius: '50%', background: '#fff', transition: 'left .2s' }} />
+            </div>
+          </div>
+        ))}
       </div>
 
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
+      <div style={{ margin: '18px 20px 0', padding: '13px 15px', borderRadius: '13px', background: '#fff8ea', font: '500 11.5px/1.5 Manrope,sans-serif', color: '#8a6d1e' }}>
+        El cobro de la suscripción todavía no está conectado a una pasarela. Al activarla queda registrada
+        como pendiente de pago y no se te cobra nada por ahora.
+      </div>
+    </div>
+  );
+}
+
+function Barra({ label, valor, max, nota, activo }) {
+  const pct = (valor / max) * 100;
+  return (
+    <div style={{ marginBottom: '13px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
+        <div style={{ font: '700 12.5px Manrope,sans-serif', color: activo ? '#111' : '#999' }}>{label}</div>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+          <span style={{ font: '500 11px Manrope,sans-serif', color: '#888' }}>{nota}</span>
+          <span style={{ font: "700 12px 'IBM Plex Mono',monospace", color: activo ? '#0f8a6d' : '#c9c9c9' }}>
+            {Math.round(valor)}/{max}
+          </span>
+        </div>
+      </div>
+      <div style={{ height: '6px', borderRadius: '3px', background: '#f0f0ee', overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: activo ? '#0f8a6d' : '#e0e0e0', transition: 'width .4s ease' }} />
+      </div>
     </div>
   );
 }
