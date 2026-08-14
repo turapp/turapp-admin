@@ -102,6 +102,20 @@ export default function DriverAccountPage() {
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" style={{ flex: 'none', opacity: .7 }}><polyline points="9 18 15 12 9 6"/></svg>
         </button>
 
+        {/* Servicios — lo primero, porque es lo que define cuánto puede
+            trabajar. Un conductor que solo hace taxi está dejando plata. */}
+        <button onClick={() => router.push('/driver/servicios')}
+          style={{ width: '100%', textAlign: 'left', border: 'none', cursor: 'pointer', marginBottom: '12px', padding: '17px 19px', borderRadius: '20px', background: '#111', color: '#fff', display: 'flex', alignItems: 'center', gap: '13px' }}>
+          <div style={{ fontSize: '24px', flex: 'none' }}>🧩</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ font: '800 15px Manrope,sans-serif', letterSpacing: '-.02em' }}>Qué quieres hacer</div>
+            <div style={{ font: '500 11.5px/1.45 Manrope,sans-serif', opacity: .72, marginTop: '3px' }}>
+              Taxi, Cali, mandados o encomiendas. Puedes hacer varios.
+            </div>
+          </div>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" style={{ flex: 'none', opacity: .7 }}><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+
         {/* Menu Items */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           <button onClick={() => router.push('/driver/onboarding')} style={{ padding: '20px', display: 'flex', alignItems: 'center', gap: '16px', borderRadius: '20px', background: '#fff', border: '1px solid #eaeae8', boxShadow: '0 4px 12px rgba(0,0,0,0.02)', transition: 'all 0.2s ease', cursor: 'pointer' }}>
