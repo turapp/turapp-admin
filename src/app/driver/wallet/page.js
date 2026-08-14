@@ -14,6 +14,8 @@ export default function WalletPage() {
   const [heldMoney, setHeldMoney] = useState(0);
   const [movements, setMovements] = useState([]);
   const [last7, setLast7] = useState([]);
+  const [saldo, setSaldo] = useState(null);
+  const [cortes, setCortes] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -29,6 +31,16 @@ export default function WalletPage() {
       ]);
 
       setBalance(Number(driverProfile?.total_earnings || 0));
+
+      // El saldo REAL no es total_earnings: es lo que Turapp le debe menos lo
+      // que él debe de comisión cobrada por fuera. driver_balance ya cruza las
+      // dos puntas.
+      const [{ data: bal }, { data: ps }] = await Promise.all([
+        supabase.from('driver_balance').select('*').eq('driver_id', user.id).maybeSingle(),
+        supabase.from('driver_payouts').select('*').eq('driver_id', user.id).order('created_at', { ascending: false }).limit(5),
+      ]);
+      setSaldo(bal);
+      setCortes(ps || []);
       setPlanType(plan?.plan_type || 'free');
       setHeldMoney((heldSeats || []).reduce((s, r) => s + Number(r.deposit_paid || 0), 0));
       setMovements((earnings || []).slice(0, 8));
@@ -80,9 +92,36 @@ export default function WalletPage() {
           <div style={{ position: 'absolute', top: '-100px', right: '-50px', width: '300px', height: '300px', background: 'radial-gradient(circle, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 70%)', borderRadius: '50%' }}></div>
 
           <div style={{ position: 'relative', zIndex: 2 }}>
-            <div style={{ font: '700 11px Manrope,sans-serif', color: '#888', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' }}>Disponible para retirar</div>
-            <div style={{ font: '800 48px Manrope,sans-serif', letterSpacing: '-0.03em', marginBottom: '32px' }}>
-              {loading ? '···' : `$${balance.toLocaleString('es-CO')}`}
+            {/* El número grande es el NETO real, no el acumulado histórico:
+                lo que Turapp le debe menos lo que él debe de comisión. */}
+            <div style={{ font: '700 11px Manrope,sans-serif', color: '#888', letterSpacing: '0.05em', textTransform: 'uppercase', marginBottom: '8px' }}>
+              {saldo && Number(saldo.neto) < 0 ? 'Le debes a Turapp' : 'Tu saldo'}
+            </div>
+            <div style={{ font: '800 48px Manrope,sans-serif', letterSpacing: '-0.03em', marginBottom: '10px', color: saldo && Number(saldo.neto) < 0 ? '#ff7a6b' : '#fff' }}>
+              {loading ? '···' : `$${Math.abs(Number(saldo?.neto ?? 0)).toLocaleString('es-CO')}`}
+            </div>
+
+            {saldo && (
+              <div style={{ display: 'flex', gap: '18px', marginBottom: '24px', flexWrap: 'wrap' }}>
+                <div>
+                  <div style={{ font: '600 10px Manrope,sans-serif', color: '#888' }}>TURAPP TE DEBE</div>
+                  <div style={{ font: "700 15px 'IBM Plex Mono',monospace", color: '#4ade80', marginTop: '2px' }}>
+                    ${Number(saldo.creditos || 0).toLocaleString('es-CO')}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ font: '600 10px Manrope,sans-serif', color: '#888' }}>TÚ DEBES</div>
+                  <div style={{ font: "700 15px 'IBM Plex Mono',monospace", color: '#ff7a6b', marginTop: '2px' }}>
+                    ${Number(saldo.comision_efectivo_debida || 0).toLocaleString('es-CO')}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div style={{ font: '500 11.5px/1.5 Manrope,sans-serif', color: '#999', marginBottom: '24px' }}>
+              {saldo && Number(saldo.neto) < 0
+                ? 'Se descuenta de tus próximos viajes con tarjeta. No tienes que transferir nada.'
+                : 'Se te transfiere cada 3 días. Los viajes por Nequi los cobras directo del pasajero.'}
             </div>
 
             <div style={{ display: 'flex', gap: '12px' }}>
@@ -166,6 +205,27 @@ export default function WalletPage() {
           </div>
         )}
 
+
+        {cortes.length > 0 && (
+          <div style={{ marginTop: '28px' }}>
+            <div style={{ font: '800 18px Manrope,sans-serif', letterSpacing: '-0.02em', marginBottom: '12px' }}>Tus cortes</div>
+            {cortes.map((c) => (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 16px', borderRadius: '14px', border: '1px solid #eaeae8', marginBottom: '8px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ font: "700 15px 'IBM Plex Mono',monospace" }}>${Number(c.neto).toLocaleString('es-CO')}</div>
+                  <div style={{ font: '500 11px Manrope,sans-serif', color: '#666', marginTop: '2px' }}>
+                    {new Date(c.periodo_desde).toLocaleDateString('es-CO')} → {new Date(c.periodo_hasta).toLocaleDateString('es-CO')}
+                  </div>
+                </div>
+                <div style={{ padding: '4px 10px', borderRadius: '99px', font: '700 11px Manrope,sans-serif',
+                  background: c.estado === 'pagado' ? 'rgba(15,138,109,.12)' : 'rgba(201,138,30,.12)',
+                  color: c.estado === 'pagado' ? '#0f8a6d' : '#c98a1e' }}>
+                  {c.estado === 'pagado' ? 'Pagado' : 'En proceso'}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
