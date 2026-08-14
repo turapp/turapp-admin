@@ -6,6 +6,11 @@ import dynamic from 'next/dynamic';
 import { supabase } from '../../lib/supabaseClient';
 import { subscribeDriverToPush } from '../../lib/webPush';
 import DriverBottomNav from '../../components/DriverBottomNav';
+import BarraConexion from '../../components/BarraConexion';
+import AvisoPendientes from '../../components/AvisoPendientes';
+import OnboardingServicio from '../../components/OnboardingServicio';
+import AsistenteIA from '../../components/AsistenteIA';
+import { servicio } from '../../lib/servicios';
 
 const Map = dynamic(() => import('../../components/Map'), { ssr: false, loading: () => <div style={{ background: '#eee', height: '100%' }} /> });
 
@@ -13,8 +18,6 @@ export default function DriverDashboard() {
   const router = useRouter();
   // step can be: 'offline', 'online', 'incoming', 'pickup', 'waiting', 'enroute', 'completed'
   const [step, setStep] = useState('offline');
-  // vehicleType can be: 'particular', 'taxi', 'blanca'
-  const [vehicleType, setVehicleType] = useState('blanca');
   const [countdown, setCountdown] = useState(12);
   const [pin, setPin] = useState(['', '', '', '']);
   const [driverLoc, setDriverLoc] = useState([3.8850, -77.0250]); // Buenaventura real (antes 4.88, mal ubicado — mismo bug de la app de pasajeros)
@@ -25,6 +28,11 @@ export default function DriverDashboard() {
   const [user, setUser] = useState(null);
   const [tripSummary, setTripSummary] = useState(null);
   const [todayStats, setTodayStats] = useState({ total: 0, count: 0 });
+  // Con qué servicio está trabajando ahora. Un conductor puede tener taxi,
+  // Cali y encomiendas aprobados a la vez, así que toda la pantalla —color,
+  // textos, qué se le avisa— sigue a esta variable y no al tipo de vehículo.
+  const [servicioActivo, setServicioActivo] = useState('taxi');
+  const [resumen, setResumen] = useState({ semana: 0, rating: null, aceptacion: null, horas: null });
   const [riderRatingStars, setRiderRatingStars] = useState(5);
   const [submittingRiderRating, setSubmittingRiderRating] = useState(false);
   // Tiempo real de espera al pasajero. Antes era un "1:42" fijo en pantalla.
@@ -90,6 +98,51 @@ export default function DriverDashboard() {
     });
   }, []);
 
+  // Los números de las tarjetas eran de mentira: $486K la semana, 4,92 de
+  // calificación, 94% de aceptación, 4h 12m en línea — los mismos para todo
+  // conductor que abriera la app. Ahora salen de sus propios viajes.
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      const hoy = new Date(); hoy.setHours(0, 0, 0, 0);
+      const semana = new Date(Date.now() - 7 * 864e5);
+
+      const [{ data: gan }, { data: perfil }, { data: ofertas }] = await Promise.all([
+        supabase.from('earnings').select('net_earning, created_at').eq('driver_id', user.id).gte('created_at', semana.toISOString()),
+        supabase.from('profiles').select('rating').eq('id', user.id).single(),
+        supabase.from('trip_offers').select('status').eq('driver_id', user.id).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()),
+      ]);
+
+      const deHoy = (gan ?? []).filter(g => new Date(g.created_at) >= hoy);
+      const respondidas = (ofertas ?? []).filter(o => o.status !== 'pending');
+      const aceptadas = respondidas.filter(o => o.status === 'accepted');
+
+      setTodayStats({
+        total: deHoy.reduce((a, g) => a + Number(g.net_earning || 0), 0),
+        count: deHoy.length,
+      });
+      setResumen({
+        semana: (gan ?? []).reduce((a, g) => a + Number(g.net_earning || 0), 0),
+        rating: perfil?.rating != null ? Number(perfil.rating) : null,
+        // Sin ofertas todavía no hay porcentaje. Mostrar 0% a alguien que
+        // acaba de entrar sería castigarlo por algo que no ha hecho.
+        aceptacion: respondidas.length ? Math.round((aceptadas.length / respondidas.length) * 100) : null,
+      });
+    })();
+  }, [user, step]);
+
+  // Conectarse y desconectarse de verdad: sin esto el conductor se veía "en
+  // línea" en su pantalla mientras el backend lo seguía teniendo apagado, y
+  // por eso no le llegaba nada.
+  const cambiarConexion = async (aLinea, servicioElegido) => {
+    if (servicioElegido) setServicioActivo(servicioElegido);
+    setStep(aLinea ? 'online' : 'offline');
+    if (!user) return;
+    await supabase.from('driver_profiles')
+      .update({ status: aLinea ? 'online' : 'offline' })
+      .eq('id', user.id);
+  };
+
   // Listen for new trips when online
   useEffect(() => {
     if (step === 'online' && user) {
@@ -153,11 +206,6 @@ export default function DriverDashboard() {
     return () => clearInterval(timer);
   }, [step, countdown, currentOfferId, currentTrip?.id]);
 
-  const triggerIncoming = () => {
-    setCountdown(12);
-    setStep('incoming');
-  };
-
   const renderMap = (type) => {
     const markers = [{ position: driverLoc, popup: 'Mi Ubicación' }];
     if (currentTrip && (step === 'incoming' || step === 'pickup')) {
@@ -187,97 +235,25 @@ export default function DriverDashboard() {
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff', color: '#111', fontFamily: 'Manrope, sans-serif' }}>
       
-      {/* Vehicle Type Switcher */}
+      {/* Barra de conexión + qué hay esperando. Antes aquí había un botón que
+          rotaba entre "Particular / Taxi / Placa Blanca" sin efecto real, y
+          tres banners fijos (Cola de Taxis, Centro de la Ciudad) que decían lo
+          mismo todos los días. Ahora manda el servicio con el que trabaja. */}
       {(step === 'offline' || step === 'online') && (
-        <div style={{ position: 'absolute', top: '24px', left: '16px', zIndex: 40 }}>
-          <button 
-            onClick={() => {
-              // Cycle through vehicle types for demo purposes
-              const types = ['particular', 'taxi', 'blanca'];
-              setVehicleType(types[(types.indexOf(vehicleType) + 1) % types.length]);
-            }}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#fff', borderRadius: '99px', padding: '6px 12px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', font: '700 11px Manrope,sans-serif', color: '#666', border: '1px solid #eaeae8' }}
-          >
-            <span>🚗</span> {vehicleType === 'particular' ? 'Particular' : vehicleType === 'taxi' ? 'Taxi' : 'Placa Blanca'}
-          </button>
-        </div>
-      )}
-
-      {/* Top Bar for Offline / Online */}
-      {(step === 'offline' || step === 'online') && (
-        <div style={{ position: 'absolute', top: '70px', left: '16px', right: '16px', zIndex: 30, display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            {/* Avatar and Status Pill */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#fff', borderRadius: '99px', padding: '6px 16px 6px 6px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-              <div style={{ width: '32px', height: '32px', borderRadius: '50%', background: '#f4f4f3', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 12px Manrope,sans-serif', color: '#111' }}>
-                YM
-              </div>
-              {step === 'offline' ? (
-                <div style={{ font: '700 13px Manrope,sans-serif', color: '#111' }}>• Estás desconectado</div>
-              ) : (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ font: '800 13px Manrope,sans-serif', color: '#fff', background: '#0f8a6d', padding: '4px 10px', borderRadius: '99px' }}>• En línea</div>
-                  <div style={{ font: '700 13px Manrope,sans-serif', color: '#111' }}>Buscando viajes</div>
-                </div>
-              )}
-            </div>
-
-            <button style={{ width: '44px', height: '44px', borderRadius: '50%', background: '#fff', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#111" strokeWidth="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
-            </button>
-          </div>
-
-          {/* Contextual Banners based on Vehicle Type */}
-          {vehicleType === 'blanca' && (
-            <div onClick={() => router.push('/driver/intermunicipal')} style={{ background: '#fff', borderRadius: '20px', padding: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', overflow: 'hidden', position: 'relative', border: '1px solid #eaeae8' }}>
-              <div style={{ position: 'absolute', right: '-10px', top: '50%', transform: 'translateY(-50%)', width: '100px', height: '100px', opacity: 0.8 }}>
-                <img src="/images/3d_calendar.png" alt="Agenda 3D" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              </div>
-              <div style={{ position: 'relative', zIndex: 2, flex: 1 }}>
-                <div style={{ display: 'inline-flex', background: '#0f8a6d', color: '#fff', font: '800 10px Manrope,sans-serif', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>EXCLUSIVO</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: '#111', marginBottom: '2px' }}>Viajes a Cali</div>
-                <div style={{ font: '600 13px Manrope,sans-serif', color: '#666', maxWidth: '70%' }}>Acepta reservas para viajes a Cali</div>
-              </div>
-            </div>
-          )}
-
-          {vehicleType === 'taxi' && (
-            <div style={{ background: '#fff', borderRadius: '20px', padding: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', overflow: 'hidden', position: 'relative', border: '1px solid #eaeae8' }}>
-              <div style={{ position: 'absolute', right: '-10px', top: '50%', transform: 'translateY(-50%)', width: '100px', height: '100px', opacity: 0.8 }}>
-                <img src="/images/3d_car.png" alt="Taxi 3D" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              </div>
-              <div style={{ position: 'relative', zIndex: 2, flex: 1 }}>
-                <div style={{ display: 'inline-flex', background: '#eab308', color: '#fff', font: '800 10px Manrope,sans-serif', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>AEROPUERTO</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: '#111', marginBottom: '2px' }}>Cola de Taxis</div>
-                <div style={{ font: '600 13px Manrope,sans-serif', color: '#666', maxWidth: '70%' }}>Únete a la fila y mira tu turno</div>
-              </div>
-            </div>
-          )}
-
-          {vehicleType === 'particular' && (
-            <div style={{ background: '#fff', borderRadius: '20px', padding: '16px', boxShadow: '0 8px 32px rgba(0,0,0,0.08)', display: 'flex', alignItems: 'center', gap: '16px', cursor: 'pointer', overflow: 'hidden', position: 'relative', border: '1px solid #eaeae8' }}>
-              <div style={{ position: 'absolute', right: '-10px', top: '50%', transform: 'translateY(-50%)', width: '100px', height: '100px', opacity: 0.8 }}>
-                <img src="/images/3d_moto.png" alt="Moto 3D" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
-              </div>
-              <div style={{ position: 'relative', zIndex: 2, flex: 1 }}>
-                <div style={{ display: 'inline-flex', background: '#c8402f', color: '#fff', font: '800 10px Manrope,sans-serif', padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>ALTA DEMANDA</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: '#111', marginBottom: '2px' }}>Centro de la Ciudad</div>
-                <div style={{ font: '600 13px Manrope,sans-serif', color: '#666', maxWidth: '70%' }}>Múltiples solicitudes de TurCarro</div>
-              </div>
-            </div>
-          )}
-          
-        </div>
-      )}
-
-      {/* Online specific overlays */}
-      {step === 'online' && (
-        <div style={{ position: 'absolute', top: '220px', left: '16px', zIndex: 30 }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#fff', padding: '8px 12px', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
-            <div style={{ font: '700 13px Manrope,sans-serif', color: '#c98a1e' }}>✦ Zona alta demanda</div>
-            <div style={{ font: '800 13px Manrope,sans-serif', color: '#111' }}>×1,4</div>
-          </div>
+        <div style={{ position: 'absolute', top: '22px', left: '16px', right: '16px', zIndex: 30, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <BarraConexion
+            user={user}
+            enLinea={step === 'online'}
+            onCambiar={cambiarConexion}
+            onServicio={setServicioActivo}
+          />
+          <AvisoPendientes
+            user={user}
+            servicioActivo={servicioActivo}
+            enLinea={step === 'online'}
+            onConectar={() => cambiarConexion(true, servicioActivo)}
+            coords={driverLoc}
+          />
         </div>
       )}
 
@@ -287,78 +263,105 @@ export default function DriverDashboard() {
       {step === 'incoming' && renderMap('dark')}
       {(step === 'pickup' || step === 'waiting' || step === 'enroute') && renderMap('light')}
 
-      {/* Offline Bottom Sheet */}
-      {step === 'offline' && (
-        <div style={{ position: 'absolute', bottom: '80px', left: '0', width: '100%', padding: '16px', zIndex: 20 }}>
-          <div style={{ background: '#fff', borderRadius: '24px', padding: '24px', boxShadow: '0 -4px 32px rgba(0,0,0,0.1)' }}>
-            <div style={{ font: '800 22px Manrope,sans-serif', color: '#111', marginBottom: '8px' }}>¿Listo para manejar?</div>
-            <div style={{ font: '500 14px/1.4 Manrope,sans-serif', color: '#666', marginBottom: '24px' }}>Conéctate para empezar a recibir solicitudes cerca de El Piñal.</div>
+      {/* Hoja de desconectado, con la cara del servicio. La pieza 3D flota
+          detrás del texto: es la misma estética de render del onboarding. */}
+      {step === 'offline' && (() => {
+        const s = servicio(servicioActivo);
+        return (
+          <div style={{ position: 'absolute', bottom: '80px', left: '0', width: '100%', padding: '16px', zIndex: 20 }}>
+            <div style={{ background: '#fff', borderRadius: '24px', padding: '22px', boxShadow: '0 -4px 32px rgba(0,0,0,0.1)', position: 'relative', overflow: 'hidden' }}>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', paddingBottom: '24px', borderBottom: '1px solid #eaeae8' }}>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>Hoy</div>
-                <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>$0</div>
-              </div>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>Esta semana</div>
-                <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>$486K</div>
-              </div>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>Calificación</div>
-                <div style={{ font: '800 18px Manrope,sans-serif', color: '#111' }}>4,92</div>
+              <img src={s.imagen} alt="" style={{
+                position: 'absolute', right: '-22px', top: '-14px', width: '124px', height: '124px',
+                objectFit: 'contain', opacity: .3, pointerEvents: 'none',
+                filter: 'drop-shadow(0 14px 18px rgba(0,0,0,.2))',
+                animation: 'trFloat 5s ease-in-out infinite',
+              }} />
+
+              <div style={{ position: 'relative', zIndex: 2 }}>
+                <div style={{ font: '700 10.5px Manrope,sans-serif', color: s.acento, letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: '5px' }}>
+                  {s.nombreLargo}
+                </div>
+                <div style={{ font: '800 22px Manrope,sans-serif', color: '#111', letterSpacing: '-.03em', marginBottom: '6px' }}>¿Listo para trabajar?</div>
+                <div style={{ font: '500 13.5px/1.45 Manrope,sans-serif', color: '#666', marginBottom: '20px', maxWidth: '78%' }}>
+                  Conéctate y empieza a recibir {s.trabajo.varios} en {s.ciudad}.
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', paddingBottom: '20px', borderBottom: '1px solid #eaeae8' }}>
+                  <div>
+                    <div style={{ font: '600 11.5px Manrope,sans-serif', color: '#666' }}>Hoy</div>
+                    <div style={{ font: '800 17px Manrope,sans-serif', color: '#111' }}>${todayStats.total.toLocaleString('es-CO')}</div>
+                  </div>
+                  <div>
+                    <div style={{ font: '600 11.5px Manrope,sans-serif', color: '#666' }}>Esta semana</div>
+                    <div style={{ font: '800 17px Manrope,sans-serif', color: '#111' }}>${resumen.semana.toLocaleString('es-CO')}</div>
+                  </div>
+                  <div>
+                    <div style={{ font: '600 11.5px Manrope,sans-serif', color: '#666' }}>Calificación</div>
+                    <div style={{ font: '800 17px Manrope,sans-serif', color: '#111' }}>
+                      {resumen.rating != null ? resumen.rating.toFixed(2).replace('.', ',') : '—'}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => cambiarConexion(true, servicioActivo)}
+                  style={{ width: '100%', height: '54px', borderRadius: '16px', background: s.acento, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 15px Manrope,sans-serif', border: 'none', boxShadow: `0 8px 22px ${s.acentoSuave.replace('.12', '.42')}` }}
+                >
+                  Conectarme y recibir {s.trabajo.varios}
+                </button>
               </div>
             </div>
-
-            <button 
-              onClick={() => setStep('online')}
-              style={{ width: '100%', height: '56px', borderRadius: '16px', background: '#0f8a6d', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 16px Manrope,sans-serif' }}
-            >
-              • Conectarme
-            </button>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
-      {/* Online Bottom Sheet */}
-      {step === 'online' && (
-        <div style={{ position: 'absolute', bottom: '80px', left: '0', width: '100%', padding: '16px', zIndex: 20 }}>
-          <div style={{ background: 'var(--bg)', borderRadius: '24px', padding: '24px', boxShadow: 'var(--sh)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div>
-                <div style={{ font: '700 12px Manrope,sans-serif', color: 'var(--mu)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Ganancias de hoy</div>
-                <div style={{ font: '800 32px Manrope,sans-serif', color: 'var(--tx)', letterSpacing: '-0.03em' }}>$68.400</div>
+      {/* Hoja de en línea. Los tres números eran fijos (7 viajes, 4h 12m,
+          94%) — ahora salen de earnings y trip_offers de este conductor. */}
+      {step === 'online' && (() => {
+        const s = servicio(servicioActivo);
+        return (
+          <div style={{ position: 'absolute', bottom: '80px', left: '0', width: '100%', padding: '16px', zIndex: 20 }}>
+            <div style={{ background: 'var(--bg)', borderRadius: '24px', padding: '22px', boxShadow: 'var(--sh)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                <div>
+                  <div style={{ font: '700 11px Manrope,sans-serif', color: 'var(--mu)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Ganancias de hoy</div>
+                  <div style={{ font: '800 31px Manrope,sans-serif', color: 'var(--tx)', letterSpacing: '-0.03em' }}>${todayStats.total.toLocaleString('es-CO')}</div>
+                </div>
+                <button onClick={() => router.push('/driver/earnings')} style={{ background: 'var(--sf)', padding: '8px 15px', borderRadius: '99px', font: '700 12.5px Manrope,sans-serif', color: 'var(--tx)', border: 'none', cursor: 'pointer' }}>
+                  Detalle &gt;
+                </button>
               </div>
-              <button onClick={() => router.push('/driver/earnings')} style={{ background: 'var(--sf)', padding: '8px 16px', borderRadius: '99px', font: '700 13px Manrope,sans-serif', color: 'var(--tx)' }}>
-                Detalle &gt;
-              </button>
-            </div>
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px', paddingBottom: '24px', borderBottom: '1px solid var(--bd2)' }}>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: 'var(--mu)' }}>Viajes</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>7</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px', paddingBottom: '20px', borderBottom: '1px solid var(--bd2)' }}>
+                <div>
+                  <div style={{ font: '600 11.5px Manrope,sans-serif', color: 'var(--mu)', textTransform: 'capitalize' }}>{s.trabajo.varios}</div>
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>{todayStats.count}</div>
+                </div>
+                <div>
+                  <div style={{ font: '600 11.5px Manrope,sans-serif', color: 'var(--mu)' }}>Calificación</div>
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>
+                    {resumen.rating != null ? resumen.rating.toFixed(2).replace('.', ',') : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ font: '600 11.5px Manrope,sans-serif', color: 'var(--mu)' }}>Aceptación</div>
+                  <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>
+                    {resumen.aceptacion != null ? `${resumen.aceptacion}%` : '—'}
+                  </div>
+                </div>
               </div>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: 'var(--mu)' }}>En línea</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>4h 12m</div>
-              </div>
-              <div>
-                <div style={{ font: '600 12px Manrope,sans-serif', color: 'var(--mu)' }}>Aceptación</div>
-                <div style={{ font: '800 16px Manrope,sans-serif', color: 'var(--tx)' }}>94%</div>
-              </div>
-            </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
-              <button 
-                onClick={() => setStep('offline')}
-                style={{ height: '56px', borderRadius: '16px', background: 'var(--bg)', border: '2px solid var(--bd2)', color: 'var(--tx)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 15px Manrope,sans-serif' }}
+              <button
+                onClick={() => cambiarConexion(false, servicioActivo)}
+                style={{ width: '100%', height: '54px', borderRadius: '16px', background: 'var(--bg)', border: '2px solid var(--bd2)', color: 'var(--tx)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '800 15px Manrope,sans-serif', cursor: 'pointer' }}
               >
                 Desconectarme
               </button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Incoming Request (Full Screen Overlay) */}
       {step === 'incoming' && (
@@ -371,12 +374,30 @@ export default function DriverDashboard() {
             </div>
           </div>
 
-          <div style={{ alignSelf: 'center', marginTop: '40px', textAlign: 'center' }}>
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#c98a1e', color: '#fff', padding: '4px 8px', borderRadius: '4px', font: '800 12px Manrope,sans-serif', marginBottom: '12px' }}>
-              ✦ Solicitud de viaje
+          {/* El bono que el pasajero puso para que lo recojan primero no se
+              veía por ningún lado. Es justo el dato que hace que valga la
+              pena aceptar, así que va arriba y separado de la tarifa. */}
+          <div style={{ alignSelf: 'center', marginTop: '36px', textAlign: 'center', padding: '0 20px' }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: servicio(servicioActivo).acento, color: '#fff', padding: '5px 11px', borderRadius: '6px', font: '800 11.5px Manrope,sans-serif', marginBottom: '12px', letterSpacing: '.02em' }}>
+              ✦ Nueva {servicio(servicioActivo).trabajo.uno}
             </div>
-            <div style={{ font: '800 48px Manrope,sans-serif', color: '#fff', letterSpacing: '-0.03em' }}>${currentTrip?.fare_estimated?.toLocaleString() || '17.400'}</div>
-            <div style={{ font: '600 14px Manrope,sans-serif', color: '#aaa', marginTop: '4px' }}>TurCarro · Aprox 5 min</div>
+            <div style={{ font: '800 46px Manrope,sans-serif', color: '#fff', letterSpacing: '-0.03em', lineHeight: 1 }}>
+              ${Number(currentTrip?.fare_estimated ?? 0).toLocaleString('es-CO')}
+            </div>
+            {Number(currentTrip?.priority_bonus ?? 0) > 0 && (
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '10px',
+                background: 'rgba(15,138,109,.22)', border: '1px solid rgba(47,191,153,.5)',
+                color: '#6fe3c0', padding: '6px 13px', borderRadius: '99px',
+                font: '800 12.5px Manrope,sans-serif',
+              }}>
+                + ${Number(currentTrip.priority_bonus).toLocaleString('es-CO')} de bono · todo tuyo
+              </div>
+            )}
+            <div style={{ font: '600 13px Manrope,sans-serif', color: '#aaa', marginTop: '9px' }}>
+              {currentTrip?.confort ? 'Taxi Confort' : 'Taxi'}
+              {currentTrip?.distance_meters ? ` · ${(currentTrip.distance_meters / 1000).toFixed(1)} km` : ''}
+            </div>
           </div>
 
           <div style={{ marginTop: 'auto', background: '#fff', borderTopLeftRadius: '24px', borderTopRightRadius: '24px', padding: '24px' }}>
@@ -769,6 +790,14 @@ export default function DriverDashboard() {
 
       {/* Bottom Nav is hidden during an active trip or completed screen */}
       {(step === 'offline' || step === 'online') && <DriverBottomNav />}
+
+      {/* El asistente solo estorba cuando ya va manejando con un pasajero, así
+          que se esconde durante el viaje. */}
+      {(step === 'offline' || step === 'online') && <AsistenteIA user={user} />}
+
+      {/* Va de último a propósito: tapa todo lo demás la primera vez que le
+          aprueban un servicio. */}
+      <OnboardingServicio user={user} onCerrar={setServicioActivo} />
     </div>
   );
 }
