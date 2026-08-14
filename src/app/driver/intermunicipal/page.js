@@ -31,6 +31,20 @@ export default function IntermunicipalPage() {
 
   return (
     <div className="tr-sb" style={{ position: 'absolute', inset: 0, overflowY: 'auto', background: '#f4f4f3', color: '#111', paddingBottom: '40px', fontFamily: 'Manrope, sans-serif' }}>
+
+      {/* Plan Cali — el gancho va arriba, donde el conductor ya está pensando
+          en cuánto le queda de cada salida. */}
+      <button onClick={() => router.push('/driver/plan-cali')}
+        style={{ width: 'calc(100% - 40px)', margin: '12px 20px 0', textAlign: 'left', border: 'none', cursor: 'pointer', padding: '15px 17px', borderRadius: '17px', background: 'linear-gradient(135deg,#1a1330 0%,#3d2168 100%)', color: '#fff', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ fontSize: '22px', flex: 'none' }}>🚐</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ font: '800 14.5px Manrope,sans-serif', letterSpacing: '-.02em' }}>Quédate con el 100% de tus pasajeros</div>
+          <div style={{ font: '500 11.5px/1.4 Manrope,sans-serif', opacity: .78, marginTop: '2px' }}>
+            Plan mensual sin comisión. Mira desde cuántos pasajeros te conviene.
+          </div>
+        </div>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" style={{ flex: 'none', opacity: .7 }}><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
       
       {/* Header */}
       <div style={{ background: '#fff', padding: '60px 24px 24px', borderBottomLeftRadius: '32px', borderBottomRightRadius: '32px', boxShadow: '0 8px 32px rgba(0,0,0,0.04)', position: 'relative', zIndex: 10 }}>
