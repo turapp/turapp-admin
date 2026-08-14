@@ -35,20 +35,11 @@ const SERVICIOS = [
   },
   {
     id: 'favor',
-    icono: '🛵',
+    icono: '📦',
     nombre: 'Tura Favor',
-    desc: 'Haces mandados: compras, filas, recoger o llevar cosas.',
+    desc: 'Llevas encomiendas dentro de Buenaventura: sobres, paquetes, lo que quepa.',
     requisitos: ['Bicicleta, moto o carro', 'Cédula al día'],
     gancho: 'No necesitas carro. Con bicicleta o moto también trabajas.',
-    vehiculos: true,
-  },
-  {
-    id: 'encomienda_ciudad',
-    icono: '📦',
-    nombre: 'Encomiendas en la ciudad',
-    desc: 'Llevas paquetes dentro de Buenaventura.',
-    requisitos: ['Bicicleta, moto o carro', 'Cédula al día'],
-    gancho: 'Aprovecha los viajes que ya haces.',
     vehiculos: true,
   },
   {
