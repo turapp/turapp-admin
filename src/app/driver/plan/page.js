@@ -37,22 +37,45 @@ export default function PlanPage() {
   const [detalle, setDetalle] = useState(null);
   const [amen, setAmen] = useState({});
   const [precio, setPrecio] = useState(29990);
+  // Precio de entrada: los primeros meses valen menos. `precio` es lo que
+  // paga HOY este conductor; `precioNormal` es a lo que sube después.
+  const [esPromo, setEsPromo] = useState(false);
+  const [precioNormal, setPrecioNormal] = useState(29990);
+  const [promoMeses, setPromoMeses] = useState(3);
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
 
   const cargar = useCallback(async (uid) => {
-    const [{ data: s }, { data: p }, { data: dp }, { data: a }, { data: cfg }] = await Promise.all([
+    const [{ data: s }, { data: p }, { data: dp }, { data: a }, { data: cfgs }] = await Promise.all([
       supabase.from('driver_subscriptions').select('*').eq('driver_id', uid).eq('estado', 'activa').order('vence_at', { ascending: false }).limit(1).maybeSingle(),
       supabase.from('profiles').select('rating').eq('id', uid).single(),
       supabase.from('driver_profiles').select('acceptance_rate').eq('id', uid).single(),
       supabase.from('driver_amenities').select('*').eq('driver_id', uid).maybeSingle(),
-      supabase.from('app_settings').select('key, value').eq('key', 'suscripcion_precio').maybeSingle(),
+      supabase.from('app_settings').select('key, value')
+        .in('key', ['suscripcion_precio', 'suscripcion_precio_promo', 'suscripcion_promo_meses']),
     ]);
 
     const activa = s && new Date(s.vence_at) > new Date();
     setSub(activa ? s : null);
     setAmen(a || {});
-    if (cfg?.value) setPrecio(Number(cfg.value));
+
+    const cfg = Object.fromEntries((cfgs ?? []).map(c => [c.key, Number(c.value)]));
+    const normal = Number.isFinite(cfg.suscripcion_precio) ? cfg.suscripcion_precio : 29990;
+    setPrecioNormal(normal);
+    if (Number.isFinite(cfg.suscripcion_promo_meses)) setPromoMeses(cfg.suscripcion_promo_meses);
+
+    // El precio de HOY lo resuelve la base (precio_suscripcion), para que la
+    // app, el panel y el cobro digan el mismo número. Si la función todavía no
+    // está aplicada, se cae al precio normal en vez de romper la pantalla.
+    const { data: pr } = await supabase.rpc('precio_suscripcion', { p_driver: uid });
+    const fila = Array.isArray(pr) ? pr[0] : pr;
+    if (fila) {
+      setPrecio(Number(fila.precio));
+      setEsPromo(fila.es_promo === true);
+    } else {
+      setPrecio(normal);
+      setEsPromo(false);
+    }
 
     // Mismo cálculo que puntaje_prioridad() en la base, replicado aquí para
     // poder desglosarlo visualmente. Si cambia allá, cambiar acá.
@@ -94,9 +117,16 @@ export default function PlanPage() {
     setGuardando(true);
     const vence = new Date();
     vence.setMonth(vence.getMonth() + 1);
+    // Se congela hasta cuándo le dura el precio de entrada. Va guardado por
+    // conductor: si mañana cambia la promoción, quien ya entró conserva la
+    // suya. Y el precio se guarda tal cual, no se recalcula después.
+    const promoHasta = esPromo ? new Date() : null;
+    if (promoHasta) promoHasta.setMonth(promoHasta.getMonth() + promoMeses);
+
     const { error } = await supabase.from('driver_subscriptions').insert({
       driver_id: userId,
       precio,
+      promo_hasta: promoHasta ? promoHasta.toISOString() : null,
       vence_at: vence.toISOString(),
       estado: 'pendiente_pago',   // no se activa hasta que el pago entre de verdad
     });
@@ -157,10 +187,22 @@ export default function PlanPage() {
             <div style={{ background: '#0f8a6d', color: '#fff', padding: '4px 10px', borderRadius: '99px', font: '700 11px Manrope,sans-serif' }}>+30 puntos</div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '5px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '7px', marginBottom: esPromo ? '6px' : '14px', flexWrap: 'wrap' }}>
             <div style={{ font: '800 30px Manrope,sans-serif', letterSpacing: '-.03em', color: '#0f8a6d' }}>{money(precio)}</div>
             <div style={{ font: '600 13px Manrope,sans-serif', color: '#666' }}>/ mes</div>
+            {esPromo && (
+              <div style={{ font: '600 14px Manrope,sans-serif', color: '#999', textDecoration: 'line-through' }}>{money(precioNormal)}</div>
+            )}
           </div>
+
+          {/* Se dice desde el principio a cuánto sube. Enterarse al cuarto mes
+              de que el precio se triplicó es la forma más rápida de que el
+              conductor se vaya y no vuelva. */}
+          {esPromo && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 12px', borderRadius: '99px', background: '#0f8a6d', color: '#fff', font: '700 11.5px Manrope,sans-serif', marginBottom: '14px' }}>
+              Los primeros {promoMeses} meses · luego {money(precioNormal)}
+            </div>
+          )}
 
           {[
             ['Prioridad en los momentos de alta demanda', 'Cuando hay pocos carros y muchos pasajeros, tú vas primero'],
