@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
+import InvitacionPro from '../../../components/InvitacionPro';
 
 export default function WalletPage() {
   const router = useRouter();
@@ -86,6 +87,12 @@ export default function WalletPage() {
       </div>
 
       <div style={{ padding: '0 24px' }}>
+
+        {/* En la billetera ya está mirando lo que le queda, así que aquí basta
+            la versión delgada: recordarle, no volver a venderle. */}
+        <div style={{ marginBottom: '18px' }}>
+          <InvitacionPro variante="barra" />
+        </div>
 
         {/* MAIN BALANCE CARD */}
         <div style={{ background: '#0a0a0a', borderRadius: '32px', padding: '32px 24px', color: '#fff', marginBottom: '24px', position: 'relative', overflow: 'hidden', boxShadow: '0 16px 40px rgba(0,0,0,0.15)' }}>

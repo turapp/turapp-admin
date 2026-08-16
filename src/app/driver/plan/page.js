@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../../lib/supabaseClient';
+import { usarPlanPro } from '../../../lib/usarPlanPro';
 
 // ============================================================
 // TURAPP PRO — suscripción del conductor
@@ -36,14 +37,17 @@ export default function PlanPage() {
   const [puntaje, setPuntaje] = useState(null);
   const [detalle, setDetalle] = useState(null);
   const [amen, setAmen] = useState({});
-  const [precio, setPrecio] = useState(29990);
+  const [precio, setPrecio] = useState(9990);
   // Precio de entrada: los primeros meses valen menos. `precio` es lo que
   // paga HOY este conductor; `precioNormal` es a lo que sube después.
   const [esPromo, setEsPromo] = useState(false);
-  const [precioNormal, setPrecioNormal] = useState(29990);
+  const [precioNormal, setPrecioNormal] = useState(19990);
   const [promoMeses, setPromoMeses] = useState(3);
   const [cargando, setCargando] = useState(true);
   const [guardando, setGuardando] = useState(false);
+  // Lo que dejó en comisión estos 30 días — el argumento que de verdad
+  // convence, porque es su propio número y no un promedio inventado.
+  const pro = usarPlanPro();
 
   const cargar = useCallback(async (uid) => {
     const [{ data: s }, { data: p }, { data: dp }, { data: a }, { data: cfgs }] = await Promise.all([
@@ -60,7 +64,7 @@ export default function PlanPage() {
     setAmen(a || {});
 
     const cfg = Object.fromEntries((cfgs ?? []).map(c => [c.key, Number(c.value)]));
-    const normal = Number.isFinite(cfg.suscripcion_precio) ? cfg.suscripcion_precio : 29990;
+    const normal = Number.isFinite(cfg.suscripcion_precio) ? cfg.suscripcion_precio : 19990;
     setPrecioNormal(normal);
     if (Number.isFinite(cfg.suscripcion_promo_meses)) setPromoMeses(cfg.suscripcion_promo_meses);
 
@@ -181,28 +185,76 @@ export default function PlanPage() {
 
       {/* Suscripción */}
       {!sub && (
-        <div style={{ margin: '20px', padding: '20px', borderRadius: '20px', border: '2px solid #0f8a6d', background: '#f0faf7' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-            <div style={{ font: '800 18px Manrope,sans-serif', letterSpacing: '-.02em' }}>Turapp Pro</div>
-            <div style={{ background: '#0f8a6d', color: '#fff', padding: '4px 10px', borderRadius: '99px', font: '700 11px Manrope,sans-serif' }}>+30 puntos</div>
+        <div style={{ margin: '20px', borderRadius: '22px', overflow: 'hidden', boxShadow: '0 14px 34px rgba(13,43,34,.28)' }}>
+
+          {/* Cabecera oscura con la oferta. El precio es lo más grande de la
+              pantalla porque es lo que decide. */}
+          <div style={{
+            position: 'relative', padding: '22px 20px 20px', color: '#fff',
+            background: 'linear-gradient(150deg,#0d2b22 0%,#124234 52%,#0f8a6d 100%)',
+          }}>
+            {[0, 1, 2].map(k => (
+              <div key={k} style={{
+                position: 'absolute', right: `${-50 - k * 34}px`, top: `${-56 - k * 24}px`,
+                width: `${180 + k * 90}px`, height: `${180 + k * 90}px`, borderRadius: '50%',
+                border: '1px solid rgba(255,255,255,.12)', pointerEvents: 'none',
+              }} />
+            ))}
+
+            <div style={{ position: 'relative', zIndex: 2 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '4px 10px', borderRadius: '99px', background: 'rgba(255,255,255,.17)', font: '800 9.5px Manrope,sans-serif', letterSpacing: '.1em' }}>
+                  ✦ TURAPP PRO
+                </div>
+                <div style={{ background: 'rgba(255,255,255,.92)', color: '#0d2b22', padding: '4px 10px', borderRadius: '99px', font: '800 10.5px Manrope,sans-serif' }}>+30 puntos</div>
+              </div>
+
+              <div style={{ font: '800 23px/1.22 Manrope,sans-serif', letterSpacing: '-.035em', marginBottom: '7px' }}>
+                Quédate con el 100%<br />de cada carrera
+              </div>
+              <div style={{ font: '500 12.5px/1.55 Manrope,sans-serif', opacity: .85, marginBottom: '16px' }}>
+                Sin suscripción dejas el <strong>15%</strong> de cada viaje. Con Pro no dejas nada.
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
+                <div style={{ font: '800 40px Manrope,sans-serif', letterSpacing: '-.045em', lineHeight: 1 }}>{money(precio)}</div>
+                <div style={{ font: '600 13px Manrope,sans-serif', opacity: .72 }}>/ mes</div>
+                {esPromo && (
+                  <div style={{ font: '600 15px Manrope,sans-serif', opacity: .55, textDecoration: 'line-through' }}>{money(precioNormal)}</div>
+                )}
+              </div>
+
+              {/* Se dice desde el principio a cuánto sube. Enterarse al cuarto
+                  mes de que el precio subió es la forma más rápida de que el
+                  conductor se vaya y no vuelva. */}
+              {esPromo && (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', marginTop: '11px', padding: '7px 13px', borderRadius: '99px', background: 'rgba(255,255,255,.16)', font: '700 11.5px Manrope,sans-serif' }}>
+                  Los primeros {promoMeses} meses · después {money(precioNormal)}
+                </div>
+              )}
+            </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '7px', marginBottom: esPromo ? '6px' : '14px', flexWrap: 'wrap' }}>
-            <div style={{ font: '800 30px Manrope,sans-serif', letterSpacing: '-.03em', color: '#0f8a6d' }}>{money(precio)}</div>
-            <div style={{ font: '600 13px Manrope,sans-serif', color: '#666' }}>/ mes</div>
-            {esPromo && (
-              <div style={{ font: '600 14px Manrope,sans-serif', color: '#999', textDecoration: 'line-through' }}>{money(precioNormal)}</div>
-            )}
-          </div>
-
-          {/* Se dice desde el principio a cuánto sube. Enterarse al cuarto mes
-              de que el precio se triplicó es la forma más rápida de que el
-              conductor se vaya y no vuelva. */}
-          {esPromo && (
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '7px 12px', borderRadius: '99px', background: '#0f8a6d', color: '#fff', font: '700 11.5px Manrope,sans-serif', marginBottom: '14px' }}>
-              Los primeros {promoMeses} meses · luego {money(precioNormal)}
+          {/* Su propio número: lo que dejó en comisión estos 30 días. */}
+          {pro.conviene && (
+            <div style={{ padding: '15px 20px', background: '#f0faf7', borderBottom: '1px solid #dcefe8' }}>
+              <div style={{ font: '600 11.5px Manrope,sans-serif', color: '#0f8a6d', marginBottom: '3px' }}>
+                Estos 30 días dejaste en comisión
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '9px', flexWrap: 'wrap' }}>
+                <div style={{ font: '800 24px Manrope,sans-serif', letterSpacing: '-.03em' }}>{money(pro.comisionMes)}</div>
+                <div style={{ font: '600 12px Manrope,sans-serif', color: '#666' }}>
+                  en {pro.viajesMes} {pro.viajesMes === 1 ? 'viaje' : 'viajes'}
+                </div>
+              </div>
+              <div style={{ font: '600 12px/1.5 Manrope,sans-serif', color: '#444', marginTop: '7px' }}>
+                Suscrito habrías pagado {money(precio)}. Te quedabas con{' '}
+                <strong style={{ color: '#0f8a6d' }}>{money(pro.ahorro)}</strong> más.
+              </div>
             </div>
           )}
+
+          <div style={{ padding: '18px 20px 20px', background: '#fff' }}>
 
           {[
             ['Prioridad en los momentos de alta demanda', 'Cuando hay pocos carros y muchos pasajeros, tú vas primero'],
@@ -226,9 +278,13 @@ export default function PlanPage() {
           )}
 
           <button onClick={suscribirse} disabled={guardando}
-            style={{ width: '100%', height: '52px', borderRadius: '15px', background: '#0f8a6d', color: '#fff', font: '800 15px Manrope,sans-serif', border: 'none' }}>
+            style={{ width: '100%', height: '54px', borderRadius: '15px', background: '#0f8a6d', color: '#fff', font: '800 15px Manrope,sans-serif', border: 'none', cursor: 'pointer', boxShadow: '0 8px 20px rgba(15,138,109,.32)' }}>
             {guardando ? 'Un momento…' : `Activar por ${money(precio)} al mes`}
           </button>
+          <div style={{ font: '500 11px/1.45 Manrope,sans-serif', color: '#888', textAlign: 'center', marginTop: '9px' }}>
+            Puedes cancelar cuando quieras. Si cancelas, vuelves al 15% por viaje.
+          </div>
+          </div>
         </div>
       )}
 

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../../lib/supabaseClient';
 import DriverBottomNav from '../../../components/DriverBottomNav';
+import InvitacionPro from '../../../components/InvitacionPro';
 
 const DAY_LABELS = ['D', 'L', 'M', 'M', 'J', 'V', 'S'];
 
@@ -10,7 +11,9 @@ export default function EarningsPage() {
   const [tab, setTab] = useState('Semana');
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]); // últimos 30 días de earnings, filtramos en el cliente por tab
-  const [tripCommissionRate, setTripCommissionRate] = useState(22);
+  // 15% es la comisión de quien no está suscrito. Solo se usa mientras cargan
+  // los viajes: en cuanto hay uno, manda la tasa real con la que se cobró.
+  const [tripCommissionRate, setTripCommissionRate] = useState(15);
 
   useEffect(() => {
     async function load() {
@@ -77,6 +80,12 @@ export default function EarningsPage() {
       {/* Header */}
       <div style={{ padding: '40px 16px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div style={{ font: '800 24px Manrope,sans-serif' }}>Ganancias</div>
+      </div>
+
+      {/* Aquí es donde el conductor está mirando cuánto ganó — y por lo tanto
+          donde le pesa ver cuánto dejó en comisión. */}
+      <div style={{ padding: '0 16px 18px' }}>
+        <InvitacionPro />
       </div>
 
       {/* Tabs */}
